@@ -20,6 +20,14 @@ export default function Login() {
   }, [location.state]);
 
   useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (!sessionError && session) {
+        navigate('/', { replace: true });
+      }
+    };
+    checkSession();
+
     const collectParams = () => {
       const params = new URLSearchParams(window.location.search);
       const hash = window.location.hash.startsWith('#')

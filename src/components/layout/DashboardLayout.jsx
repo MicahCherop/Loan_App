@@ -131,18 +131,34 @@ export default function DashboardLayout({ children }) {
     };
   }, [navigate, location.pathname, syncProfile]);
 
+  const clearAuthStorage = () => {
+    try {
+      Object.keys(window.localStorage).forEach((key) => {
+        if (key.startsWith('sb:auth') || key.startsWith('supabase.auth')) {
+          window.localStorage.removeItem(key);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to clear auth storage:', err);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       setIsLoading(true);
       setUser(null);
       setProfile(null);
       setIsMobileMenuOpen(false);
-      const { error } = await supabase.auth.signOut({ scope: 'local' });
-      if (error) throw error;
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        console.error('Logout error:', error);
+        clearAuthStorage();
+      }
     } catch (err) {
       console.error('Logout error:', err);
-      window.localStorage.clear();
+      clearAuthStorage();
     } finally {
+      clearAuthStorage();
       setIsLoading(false);
       navigate('/login', { replace: true });
     }
