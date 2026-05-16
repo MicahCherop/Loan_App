@@ -21,10 +21,7 @@ export default function Customers() {
     try {
       const { data, error } = await supabase
         .from('customers')
-        .select(`
-          *,
-          loans:loans(count)
-        `)
+        .select('*, loans(count)')
         .order('created_at', { ascending: false });
 
       if (error) {

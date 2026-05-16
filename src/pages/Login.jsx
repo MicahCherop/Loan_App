@@ -20,6 +20,30 @@ export default function Login() {
   }, [location.state]);
 
   useEffect(() => {
+    const collectParams = () => {
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash.startsWith('#')
+        ? new URLSearchParams(window.location.hash.slice(1))
+        : new URLSearchParams();
+
+      return {
+        error: params.get('error') || hash.get('error'),
+        errorCode: params.get('error_code') || hash.get('error_code'),
+        errorDescription: params.get('error_description') || hash.get('error_description'),
+      };
+    };
+
+    const { error, errorCode, errorDescription } = collectParams();
+
+    if (error || errorDescription) {
+      const message = decodeURIComponent(errorDescription || error || 'Google sign-in failed.');
+      setError(`${message}${errorCode ? ` (${errorCode})` : ''}`);
+      window.history.replaceState({}, document.title, '/login');
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
     let authSubscription = null;
     try {
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -62,7 +86,7 @@ export default function Login() {
   const handleGoogleLogin = async () => {
     setLoading(true);
     setError(null);
-    const redirectTo = `${window.location.origin}/login`;
+    const redirectTo = `${window.location.origin}/auth/callback`;
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -203,7 +227,16 @@ export default function Login() {
           </div>
 
           <p className="mt-12 text-center text-[10px] font-bold uppercase tracking-widest text-slate-400">
-            Forgot access? <span className="text-blue-500 cursor-pointer hover:underline">Contact Administrator</span>
+            Forgot access?{' '}
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = 'mailto:mic1dev.me@gmail.com?subject=Wekulo%20Credit%20access%20request';
+              }}
+              className="text-blue-500 hover:underline"
+            >
+              Contact Administrator
+            </button>
           </p>
         </div>
       </motion.div>

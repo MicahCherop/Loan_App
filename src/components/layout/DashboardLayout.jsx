@@ -294,10 +294,19 @@ export default function DashboardLayout({ children }) {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <div className="relative p-2 text-slate-300 hover:text-slate-500 cursor-pointer">
+            <div className="hidden sm:flex flex-col items-end text-right text-slate-600">
+              <span className="font-medium text-slate-800">{user?.email?.split('@')[0] || 'Officer'}</span>
+              <span className="text-[11px] uppercase tracking-[0.3em] text-slate-400">{profile?.role || 'Officer'}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/requests')}
+              className="relative p-2 text-slate-300 hover:text-slate-500 rounded-lg hover:bg-slate-50 transition-colors"
+              aria-label="Open loan requests"
+            >
               <Bell size={20} />
               <span className="absolute top-2.5 right-2.5 w-2 h-2 bg-rose-400 rounded-full border-2 border-white"></span>
-            </div>
+            </button>
           </div>
         </header>
 

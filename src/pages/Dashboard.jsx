@@ -25,20 +25,42 @@ export default function Dashboard() {
     pendingRequests: 0,
     totalDisbursed: 0
   });
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    // Fetch actual stats from Supabase
     const fetchStats = async () => {
-      const { count: leadsCount } = await supabase.from('leads').select('*', { count: 'exact', head: true });
-      const { count: activeLoansCount } = await supabase.from('loans').select('*', { count: 'exact', head: true }).eq('status', 'active');
-      const { count: pendingRequestsCount } = await supabase.from('loan_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending');
-      
-      setStats({
-        totalLeads: leadsCount || 0,
-        activeLoans: activeLoansCount || 0,
-        pendingRequests: pendingRequestsCount || 0,
-        totalDisbursed: 254300 // Mock for now or sum from disbursed loans
-      });
+      setError(null);
+      try {
+        const [
+          { count: leadsCount, error: leadsError },
+          { count: activeLoansCount, error: activeLoansError },
+          { count: pendingRequestsCount, error: pendingRequestsError },
+          { data: disbursedLoans, error: disbursedError }
+        ] = await Promise.all([
+          supabase.from('leads').select('*', { count: 'exact', head: true }),
+          supabase.from('loans').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+          supabase.from('loan_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+          supabase.from('loans').select('repayment_amount').in('status', ['active', 'disbursed']),
+        ]);
+
+        const errorMessage = leadsError?.message || activeLoansError?.message || pendingRequestsError?.message || disbursedError?.message;
+        if (errorMessage) {
+          console.error('Dashboard stats error:', errorMessage);
+          setError(errorMessage);
+        }
+
+        const totalDisbursed = (disbursedLoans || []).reduce((sum, loan) => sum + Number(loan.repayment_amount || 0), 0);
+
+        setStats({
+          totalLeads: leadsCount || 0,
+          activeLoans: activeLoansCount || 0,
+          pendingRequests: pendingRequestsCount || 0,
+          totalDisbursed,
+        });
+      } catch (err) {
+        console.error('Failed to load dashboard stats:', err);
+        setError(err.message || 'Unable to load dashboard stats.');
+      }
     };
 
     fetchStats();
@@ -71,6 +93,12 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+
+      {error && (
+        <div className="rounded-2xl border border-rose-100 bg-rose-50 px-5 py-4 text-sm font-medium text-rose-700">
+          {error}
+        </div>
+      )}
 
       {/* Urgent Section */}
       <section className="bg-slate-800 rounded-2xl p-5 sm:p-8 text-white shadow-lg relative overflow-hidden group">

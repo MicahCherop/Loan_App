@@ -13,16 +13,14 @@ export default function LoanRequests() {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [processingId, setProcessingId] = useState(null);
 
   async function fetchRequests() {
     setLoading(true);
     setErrorMessage(null);
     const { data, error } = await supabase
       .from('loan_requests')
-      .select(`
-        *,
-        customer:customer_id (*)
-      `)
+      .select('*, customer:customer_id(*)')
       .eq('status', 'pending')
       .order('created_at', { ascending: false });
 
@@ -36,7 +34,20 @@ export default function LoanRequests() {
   }, []);
 
   const handleAction = async (requestId, action, requestData) => {
-    const { data: { user } } = await supabase.auth.getUser();
+    setProcessingId(requestId);
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+
+    if (userError) {
+      alert('Unable to determine logged in user: ' + userError.message);
+      setProcessingId(null);
+      return;
+    }
+
+    if (!user) {
+      alert('You must be logged in to process loan requests.');
+      setProcessingId(null);
+      return;
+    }
 
     // 1. Update Request
     const { error: rError } = await supabase
@@ -46,6 +57,7 @@ export default function LoanRequests() {
 
     if (rError) {
       alert('Error updating request: ' + rError.message);
+      setProcessingId(null);
       return;
     }
 
@@ -76,7 +88,8 @@ export default function LoanRequests() {
       }
     }
 
-    fetchRequests();
+    await fetchRequests();
+    setProcessingId(null);
   };
 
   return (
@@ -163,14 +176,16 @@ export default function LoanRequests() {
               <div className="p-6 grid grid-cols-2 gap-4 mt-auto">
                 <button
                   onClick={() => handleAction(req.id, 'rejected', req)}
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-500 text-xs font-semibold rounded-2xl hover:bg-rose-50 hover:text-rose-500 hover:border-rose-100 transition-all active:scale-95"
+                  disabled={processingId === req.id}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-white border border-slate-200 text-slate-500 text-xs font-semibold rounded-2xl hover:bg-rose-50 hover:text-rose-500 hover:border-rose-100 transition-all active:scale-95 disabled:opacity-60"
                 >
                   <XCircle size={16} />
                   Reject
                 </button>
                 <button
                   onClick={() => handleAction(req.id, 'approved', req)}
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white text-xs font-semibold rounded-2xl hover:bg-blue-700 transition-all shadow-sm active:scale-95"
+                  disabled={processingId === req.id}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white text-xs font-semibold rounded-2xl hover:bg-blue-700 transition-all shadow-sm active:scale-95 disabled:opacity-60"
                 >
                   <CheckCircle2 size={16} />
                    Approve

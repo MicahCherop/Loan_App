@@ -10,12 +10,14 @@ import Reports from './pages/Reports.jsx';
 import NewLoan from './pages/NewLoan.jsx';
 import CustomerDetail from './pages/CustomerDetail.jsx';
 import Admin from './pages/Admin.jsx';
+import AuthCallback from './pages/auth/callback.jsx';
 
 export default function App() {
   return (
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
         <Route
           path="/"
           element={

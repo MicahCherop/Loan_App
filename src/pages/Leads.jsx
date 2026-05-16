@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.js';
 import { 
   UserPlus, 
@@ -20,6 +20,8 @@ export default function Leads() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [errorMessage, setErrorMessage] = useState(null);
+  const [activeMenuId, setActiveMenuId] = useState(null);
+  const statusFilterRef = useRef(null);
   const navigate = useNavigate();
 
   async function fetchLeads() {
@@ -57,10 +59,15 @@ export default function Leads() {
       return;
     }
 
-    // Ensure phone starts with 254
     let formattedPhone = newLead.phone.trim();
-    if (!formattedPhone.startsWith('254')) {
-      alert('Phone number must start with 254');
+    if (formattedPhone.startsWith('+254')) {
+      formattedPhone = formattedPhone.slice(1);
+    } else if (formattedPhone.startsWith('0')) {
+      formattedPhone = `254${formattedPhone.slice(1)}`;
+    }
+
+    if (!formattedPhone.startsWith('254') || formattedPhone.length < 12) {
+      alert('Phone number must start with 254 and include the full number.');
       return;
     }
     
@@ -80,6 +87,20 @@ export default function Leads() {
   const convertToCustomer = (lead) => {
     // Navigate to customer creation with lead details
     navigate('/new-loan', { state: { lead } });
+  };
+
+  const handleFilterClick = () => {
+    statusFilterRef.current?.focus();
+  };
+
+  const copyPhoneNumber = async (phone) => {
+    try {
+      await navigator.clipboard.writeText(phone);
+      alert('Phone number copied.');
+    } catch {
+      window.prompt('Copy phone number:', phone);
+    }
+    setActiveMenuId(null);
   };
 
   const filteredLeads = leads.filter((lead) => {
@@ -104,6 +125,7 @@ export default function Leads() {
         </div>
         <div className="flex items-center gap-3">
           <select
+            ref={statusFilterRef}
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
@@ -112,7 +134,11 @@ export default function Leads() {
             <option value="new">New</option>
             <option value="rejected">Rejected</option>
           </select>
-          <button type="button" className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-600">
+          <button
+            type="button"
+            onClick={handleFilterClick}
+            className="hidden sm:flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+          >
             <Filter size={18} />
             Filter
           </button>
@@ -193,9 +219,43 @@ export default function Leads() {
                           <ArrowRight size={14} className="hidden sm:inline" />
                         </button>
                       )}
-                      <button className="p-2 text-slate-300 hover:text-slate-600 rounded-lg hover:bg-slate-50 transition-all border border-transparent">
-                        <MoreVertical size={18} />
-                      </button>
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setActiveMenuId(activeMenuId === lead.id ? null : lead.id)}
+                          className="p-2 text-slate-300 hover:text-slate-600 rounded-lg hover:bg-slate-50 transition-all border border-transparent"
+                          aria-label={`More actions for ${lead.name}`}
+                        >
+                          <MoreVertical size={18} />
+                        </button>
+                        {activeMenuId === lead.id && (
+                          <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden text-left">
+                            <a
+                              href={`tel:+${lead.phone}`}
+                              onClick={() => setActiveMenuId(null)}
+                              className="block px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                            >
+                              Call lead
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => copyPhoneNumber(lead.phone)}
+                              className="w-full text-left px-4 py-2.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                            >
+                              Copy phone
+                            </button>
+                            {lead.status === 'new' && (
+                              <button
+                                type="button"
+                                onClick={() => convertToCustomer(lead)}
+                                className="w-full text-left px-4 py-2.5 text-xs font-medium text-blue-600 hover:bg-blue-50"
+                              >
+                                Process loan
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -234,10 +294,9 @@ export default function Leads() {
                   type="tel"
                   value={newLead.phone}
                   onChange={(e) => {
-                    const val = e.target.value;
-                    if (val.startsWith('254') || val === '25' || val === '2' || val === '') {
-                      setNewLead({ ...newLead, phone: val });
-                    }
+                    const raw = e.target.value;
+                    const digits = raw.replace(/\D/g, '');
+                    setNewLead({ ...newLead, phone: digits });
                   }}
                   className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-300 transition-all text-sm"
                   placeholder="254..."

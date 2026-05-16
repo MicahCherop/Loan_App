@@ -208,7 +208,7 @@ export default function NewLoan() {
   };
 
   const handleUpdateStatus = async (status) => {
-    if (!createdLoanId) return;
+    if (!createdLoanId || loading) return;
     setLoading(true);
     const nextStatus = status === 'disbursed' ? 'active' : status;
     const { error } = await supabase
@@ -502,19 +502,22 @@ export default function NewLoan() {
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                  <button 
                    onClick={() => handleUpdateStatus('pending')}
-                   className="px-6 py-4 bg-slate-100 text-slate-600 font-semibold rounded-2xl hover:bg-slate-200 transition-all active:scale-95"
+                   disabled={loading}
+                   className="px-6 py-4 bg-slate-100 text-slate-600 font-semibold rounded-2xl hover:bg-slate-200 transition-all active:scale-95 disabled:opacity-60"
                  >
                    Stay Pending
                  </button>
                  <button 
                    onClick={() => handleUpdateStatus('rejected')}
-                   className="px-6 py-4 bg-rose-50 text-rose-600 font-semibold rounded-2xl hover:bg-rose-100 transition-all active:scale-95 border border-rose-100"
+                   disabled={loading}
+                   className="px-6 py-4 bg-rose-50 text-rose-600 font-semibold rounded-2xl hover:bg-rose-100 transition-all active:scale-95 border border-rose-100 disabled:opacity-60"
                  >
                    Reject
                  </button>
                  <button 
                    onClick={() => handleUpdateStatus('approved')}
-                   className="px-6 py-4 bg-blue-600 text-white font-semibold rounded-2xl hover:bg-blue-700 transition-all shadow-lg active:scale-95"
+                   disabled={loading}
+                   className="px-6 py-4 bg-blue-600 text-white font-semibold rounded-2xl hover:bg-blue-700 transition-all shadow-lg active:scale-95 disabled:opacity-60"
                  >
                    Approve
                  </button>
@@ -534,7 +537,8 @@ export default function NewLoan() {
 
               <button 
                 onClick={() => handleUpdateStatus('disbursed')}
-                className="w-full px-6 py-5 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-100 active:scale-95 flex items-center justify-center gap-3"
+                disabled={loading}
+                className="w-full px-6 py-5 bg-emerald-600 text-white font-bold rounded-2xl hover:bg-emerald-700 transition-all shadow-xl shadow-emerald-100 active:scale-95 flex items-center justify-center gap-3 disabled:opacity-60"
               >
                 Disburse Funds
                 <ArrowRight size={20} />

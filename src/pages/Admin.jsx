@@ -6,7 +6,8 @@ import { motion } from 'motion/react';
 export default function Admin() {
   const [profiles, setProfiles] = useState([]);
   const [preAuths, setPreAuths] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [submitLoading, setSubmitLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newInviteEmail, setNewInviteEmail] = useState('');
   const [newInviteRole, setNewInviteRole] = useState('officer');
@@ -15,7 +16,7 @@ export default function Admin() {
   const [errorMessage, setErrorMessage] = useState(null);
 
   async function fetchData() {
-    setLoading(true);
+    setPageLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
@@ -33,7 +34,7 @@ export default function Admin() {
         if (isDev || profile?.role === 'developer' || profile?.role === 'admin') {
           const [profilesRes, preAuthRes] = await Promise.all([
             supabase.from('profiles').select('*').order('created_at', { ascending: false }),
-            supabase.from('pre_authorized_emails').select('*').order('created_at', { ascending: false })
+            supabase.from('pre_authorized_emails').select('*').order('created_at', { ascending: false }),
           ]);
 
           if (profilesRes.error) console.error('Profiles fetch error:', profilesRes.error);
@@ -46,7 +47,7 @@ export default function Admin() {
     } catch (err) {
       console.error('Fetch data error:', err);
     } finally {
-      setLoading(false);
+      setPageLoading(false);
     }
   }
 
@@ -71,7 +72,7 @@ export default function Admin() {
 
   const addUser = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    setSubmitLoading(true);
     setMessage(null);
     setErrorMessage(null);
     
@@ -81,21 +82,21 @@ export default function Admin() {
         throw new Error('Enter a valid email address.');
       }
       
-      const { error: preAuthError } = await supabase.rpc('authorize_user_email', {
+      const { error } = await supabase.rpc('set_authorized_user_role', {
         target_email: email,
         target_role: newInviteRole,
       });
       
-      if (preAuthError) throw preAuthError;
+      if (error) throw error;
 
       setNewInviteEmail('');
       setShowAddModal(false);
-      setMessage(`${email} is authorized as ${newInviteRole}. They can now use Continue with Google.`);
-      fetchData();
+      setMessage(`${email} was added as ${newInviteRole}. They can now sign in with Google.`);
+      await fetchData();
     } catch (err) {
       setErrorMessage(err.message || 'Error adding user');
     } finally {
-      setLoading(false);
+      setSubmitLoading(false);
     }
   };
 
@@ -123,12 +124,13 @@ export default function Admin() {
     if (error) {
       alert(error.message);
     } else {
+      setMessage(`${email} authorization has been removed.`);
       fetchData();
     }
   };
 
   const isDeveloper = currentProfile?.email === 'mic1dev.me@gmail.com';
-  if (!loading && !isDeveloper && currentProfile?.role !== 'developer' && currentProfile?.role !== 'admin') {
+  if (!pageLoading && !isDeveloper && currentProfile?.role !== 'developer' && currentProfile?.role !== 'admin') {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] text-slate-500">
         <Shield size={64} className="mb-4 opacity-20" />
@@ -143,7 +145,7 @@ export default function Admin() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">User Management</h2>
-          <p className="text-sm text-slate-400 mt-1">Authorize exact Google email addresses before they can enter the app</p>
+          <p className="text-sm text-slate-400 mt-1">Add users directly to the platform so they can sign in with Google immediately.</p>
         </div>
         <button
           onClick={() => setShowAddModal(true)}
@@ -184,7 +186,7 @@ export default function Admin() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {loading ? (
+                {pageLoading ? (
                   <tr><td colSpan={4} className="px-8 py-10 text-center text-slate-400 text-sm">Loading...</td></tr>
                 ) : profiles.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
@@ -235,26 +237,27 @@ export default function Admin() {
             </table>
           </div>
         </div>
-
-        {/* Pending Pre-authorizations */}
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden opacity-90 grayscale-[0.5] hover:grayscale-0 transition-all">
+        {/* Pending Users */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="p-6 border-b border-slate-100 flex items-center gap-3">
             <Mail className="text-orange-500" size={20} />
-            <h3 className="font-bold text-slate-800">Pending Authorizations</h3>
+            <h3 className="font-bold text-slate-800">Pending Users</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead className="bg-slate-50/50 text-[10px] font-bold text-slate-500 uppercase tracking-widest border-b border-slate-100">
                 <tr>
-                  <th className="px-8 py-4">Authorized Email</th>
+                  <th className="px-8 py-4">Email</th>
                   <th className="px-8 py-4">Expected Role</th>
-                  <th className="px-8 py-4">Waiting Since</th>
+                  <th className="px-8 py-4">Invited</th>
                   <th className="px-8 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {preAuths.length === 0 ? (
-                  <tr><td colSpan={4} className="px-8 py-10 text-center text-slate-300 text-sm italic">No pending authorizations</td></tr>
+                {pageLoading ? (
+                  <tr><td colSpan={4} className="px-8 py-10 text-center text-slate-400 text-sm">Loading...</td></tr>
+                ) : preAuths.length === 0 ? (
+                  <tr><td colSpan={4} className="px-8 py-10 text-center text-slate-300 text-sm italic">No pending users</td></tr>
                 ) : preAuths.map((item) => (
                   <tr key={item.email} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-8 py-4 text-sm text-slate-600">{item.email}</td>
@@ -263,11 +266,9 @@ export default function Admin() {
                         {item.role.toUpperCase()}
                       </span>
                     </td>
-                    <td className="px-8 py-4 text-xs text-slate-400">
-                      {new Date(item.created_at).toLocaleDateString()}
-                    </td>
+                    <td className="px-8 py-4 text-xs text-slate-400">{new Date(item.created_at).toLocaleDateString()}</td>
                     <td className="px-8 py-4 text-right">
-                      <button 
+                      <button
                         onClick={() => removePreAuth(item.email)}
                         className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
                       >
@@ -279,8 +280,7 @@ export default function Admin() {
               </tbody>
             </table>
           </div>
-        </div>
-      </div>
+        </div>      </div>
 
       {showAddModal && (
          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -292,7 +292,7 @@ export default function Admin() {
             <div className="p-8 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="text-xl font-bold text-slate-800">Add New User</h3>
-                <p className="text-xs text-slate-400 mt-1">Add the exact Google email that should be allowed to sign in</p>
+                <p className="text-xs text-slate-400 mt-1">Add the exact Google email to add the user directly to the platform.</p>
               </div>
               <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600 p-2 hover:bg-slate-50 rounded-xl transition-all">
                 <X size={20} />
@@ -339,12 +339,16 @@ export default function Admin() {
                 </div>
               </div>
 
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                New users are authorized immediately, but their profile row is created only after they sign in for the first time.
+              </div>
+
               <button
                 type="submit"
-                disabled={loading}
+                disabled={submitLoading}
                 className="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl hover:bg-blue-700 transition-all shadow-lg active:scale-[0.98] mt-4 disabled:opacity-60"
               >
-                {loading ? 'Saving...' : 'Authorize User'}
+                {submitLoading ? 'Saving...' : 'Save User'}
               </button>
             </form>
           </motion.div>
