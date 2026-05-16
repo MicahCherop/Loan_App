@@ -32,6 +32,8 @@ export default function DashboardLayout({ children }) {
     try {
       setSyncError(null);
       const email = userData.email?.toLowerCase();
+      const isDeveloper = email === 'mic1dev.me@gmail.com';
+      
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
@@ -42,22 +44,27 @@ export default function DashboardLayout({ children }) {
         setProfile(data);
         return data;
       } else if (error && error.code === 'PGRST116') {
+        // Profile doesn't exist; check authorization
         const { data: preAuth, error: preAuthError } = await supabase
           .from('pre_authorized_emails')
           .select('role')
           .eq('email', email)
           .maybeSingle();
 
-        if (preAuthError) throw preAuthError;
-
-        const role = email === 'mic1dev.me@gmail.com' ? 'developer' : preAuth?.role;
-
-        if (!role) {
-          await supabase.auth.signOut();
-          navigate('/login', { replace: true });
-          throw new Error(`${email} is not authorized for Wekulo Credit.`);
+        if (preAuthError && preAuthError.code !== 'PGRST116') {
+          throw preAuthError;
         }
 
+        const role = isDeveloper ? 'developer' : preAuth?.role;
+
+        if (!role) {
+          console.warn(`User ${email} is not pre-authorized.`);
+          await supabase.auth.signOut();
+          navigate('/login', { replace: true });
+          throw new Error(`${email} is not authorized for Wekulo Credit. Contact your administrator.`);
+        }
+
+        // Create profile with proper role
         const { data: newProfile, error: insertError } = await supabase
           .from('profiles')
           .insert([{ id: userData.id, email, role }])
@@ -65,6 +72,8 @@ export default function DashboardLayout({ children }) {
           .single();
 
         if (insertError) {
+          console.error('Profile insert error:', insertError);
+          // Retry reading in case it was race condition
           const { data: retryData } = await supabase
             .from('profiles')
             .select('*')
@@ -72,6 +81,7 @@ export default function DashboardLayout({ children }) {
             .single();
           if (retryData) {
             setProfile(retryData);
+            return retryData;
           } else {
             throw insertError;
           }
@@ -85,10 +95,9 @@ export default function DashboardLayout({ children }) {
     } catch (err) {
       console.error('Profile sync error:', err);
       setSyncError(err.message || 'Failed to sync user profile. Data may not be visible.');
-      await supabase.auth.signOut();
       setUser(null);
       setProfile(null);
-      navigate('/login', { replace: true, state: { authError: err.message } });
+      // Don't sign out here; let the auth listener handle it
       return null;
     }
   }, [navigate]);
@@ -107,21 +116,29 @@ export default function DashboardLayout({ children }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
 
-      if (event === 'SIGNED_OUT' || !session) {
-        setUser(null);
-        setProfile(null);
-        if (location.pathname !== '/login') {
-          navigate('/login');
-        }
-      } else if (session) {
-        setUser(session.user);
-        const activeProfile = await syncProfile(session.user);
-        if (!activeProfile) {
+      try {
+        if (event === 'SIGNED_OUT' || !session) {
+          setUser(null);
+          setProfile(null);
           setIsLoading(false);
-          return;
+          // Only navigate if not already on login page
+          if (mounted && location.pathname !== '/login') {
+            navigate('/login', { replace: true });
+          }
+        } else if (session) {
+          setUser(session.user);
+          const activeProfile = await syncProfile(session.user);
+          if (!activeProfile) {
+            setUser(null);
+            setIsLoading(false);
+            return;
+          }
+          setIsLoading(false);
         }
+      } catch (err) {
+        console.error('Auth state change error:', err);
+        setIsLoading(false);
       }
-      setIsLoading(false);
     });
 
     return () => {
@@ -145,21 +162,18 @@ export default function DashboardLayout({ children }) {
 
   const handleLogout = async () => {
     try {
-      setIsLoading(true);
       setUser(null);
       setProfile(null);
       setIsMobileMenuOpen(false);
+      clearAuthStorage();
       const { error } = await supabase.auth.signOut();
       if (error) {
         console.error('Logout error:', error);
-        clearAuthStorage();
       }
     } catch (err) {
       console.error('Logout error:', err);
-      clearAuthStorage();
     } finally {
-      clearAuthStorage();
-      setIsLoading(false);
+      // Navigate after clearing state
       navigate('/login', { replace: true });
     }
   };

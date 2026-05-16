@@ -91,14 +91,19 @@ export default function Admin() {
         target_role: newInviteRole,
       });
       
-      if (error) throw error;
+      if (error) {
+        console.error('RPC error:', error);
+        throw error;
+      }
 
       setNewInviteEmail('');
       setShowAddModal(false);
-      setMessage(`${email} was added as ${newInviteRole}. They can now sign in with Google.`);
+      setMessage(`✓ ${email} has been added as ${newInviteRole}. They can now sign in with Google or email/password.`);
+      await new Promise(r => setTimeout(r, 1000));
       await fetchData();
     } catch (err) {
-      setErrorMessage(err.message || 'Error adding user');
+      console.error('Add user error:', err);
+      setErrorMessage(`Error adding user: ${err.message || err}`);
     } finally {
       setSubmitLoading(false);
     }

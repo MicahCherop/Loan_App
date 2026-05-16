@@ -35,12 +35,17 @@ export default function Leads() {
         .order('created_at', { ascending: false });
       
       if (error) {
+        if (error.code === 'PGRST001') {
+          setErrorMessage('Access denied. You are not authorized to view leads. Ensure your account is pre-authorized.');
+        } else {
+          setErrorMessage('Error fetching leads: ' + error.message);
+        }
         console.error('Error fetching leads:', error);
-        setErrorMessage(error.message);
       }
       if (data) setLeads(data);
     } catch (err) {
       console.error('Unexpected error fetching leads:', err);
+      setErrorMessage('Unexpected error: ' + (err.message || err));
     } finally {
       setLoading(false);
     }
@@ -81,14 +86,23 @@ export default function Leads() {
       ]);
 
       if (error) {
-        alert('Error creating lead: ' + error.message);
+        if (error.code === 'PGRST001') {
+          alert('Access denied: You are not authorized to add leads. Ensure your account is pre-authorized.');
+        } else if (error.code === 'PGRST116') {
+          alert('Your profile was not properly created. Please log out and log back in.');
+        } else {
+          alert('Error creating lead: ' + error.message);
+        }
+        console.error('Add lead error:', error);
       } else {
         setShowAddModal(false);
         setNewLead({ name: '', phone: '254' });
+        alert('Lead added successfully!');
         fetchLeads();
       }
     } catch (err) {
       alert('Error creating lead: ' + (err.message || err));
+      console.error('Unexpected add lead error:', err);
     } finally {
       setLoading(false);
     }
