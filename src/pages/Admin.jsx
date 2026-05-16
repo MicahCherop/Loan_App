@@ -18,7 +18,11 @@ export default function Admin() {
   async function fetchData() {
     setPageLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      const user = session?.user;
+      if (sessionError) {
+        throw sessionError;
+      }
       if (user) {
         const { data: profile, error: profileError } = await supabase
           .from('profiles')

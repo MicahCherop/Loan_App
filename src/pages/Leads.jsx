@@ -52,10 +52,13 @@ export default function Leads() {
 
   const handleAddLead = async (e) => {
     e.preventDefault();
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    setLoading(true);
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    const user = session?.user;
 
-    if (userError || !user) {
-      alert(userError?.message || 'You must be logged in to add a lead.');
+    if (sessionError || !user) {
+      setLoading(false);
+      alert(sessionError?.message || 'You must be logged in to add a lead.');
       return;
     }
 
@@ -67,20 +70,27 @@ export default function Leads() {
     }
 
     if (!formattedPhone.startsWith('254') || formattedPhone.length < 12) {
+      setLoading(false);
       alert('Phone number must start with 254 and include the full number.');
       return;
     }
-    
-    const { error } = await supabase.from('leads').insert([
-      { name: newLead.name, phone: formattedPhone, officer_id: user?.id, status: 'new', email: '' }
-    ]);
 
-    if (error) {
-      alert('Error creating lead: ' + error.message);
-    } else {
-      setShowAddModal(false);
-      setNewLead({ name: '', phone: '254' });
-      fetchLeads();
+    try {
+      const { error } = await supabase.from('leads').insert([
+        { name: newLead.name, phone: formattedPhone, officer_id: user?.id, status: 'new', email: '' }
+      ]);
+
+      if (error) {
+        alert('Error creating lead: ' + error.message);
+      } else {
+        setShowAddModal(false);
+        setNewLead({ name: '', phone: '254' });
+        fetchLeads();
+      }
+    } catch (err) {
+      alert('Error creating lead: ' + (err.message || err));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -143,6 +153,7 @@ export default function Leads() {
             Filter
           </button>
           <button
+            type="button"
             onClick={() => setShowAddModal(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 transition-all shadow-sm active:scale-95"
           >

@@ -106,10 +106,11 @@ export default function NewLoan() {
     if (!validateStep()) return;
     
     setLoading(true);
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    const user = session?.user;
 
-    if (userError || !user) {
-      alert(userError?.message || 'You must be logged in to create a loan.');
+    if (sessionError || !user) {
+      alert(sessionError?.message || 'You must be logged in to create a loan.');
       setLoading(false);
       return;
     }

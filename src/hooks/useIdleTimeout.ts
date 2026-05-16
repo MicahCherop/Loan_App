@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabase.js';
 
 const IDLE_TIMEOUT = 10 * 60 * 1000; // 10 minutes in milliseconds
 

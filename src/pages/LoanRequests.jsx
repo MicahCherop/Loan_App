@@ -35,10 +35,11 @@ export default function LoanRequests() {
 
   const handleAction = async (requestId, action, requestData) => {
     setProcessingId(requestId);
-    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    const user = session?.user;
 
-    if (userError) {
-      alert('Unable to determine logged in user: ' + userError.message);
+    if (sessionError) {
+      alert('Unable to determine logged in user: ' + sessionError.message);
       setProcessingId(null);
       return;
     }
