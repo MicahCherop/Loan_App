@@ -6,8 +6,8 @@ export default function AuthCallback() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const handleLogin = async () => {
-      // First, check for OAuth error parameters in the URL
+    const handleCallback = async () => {
+      // Check for OAuth error parameters in the URL
       const params = new URLSearchParams(window.location.search);
       const hash = window.location.hash.startsWith('#')
         ? new URLSearchParams(window.location.hash.slice(1))
@@ -28,11 +28,14 @@ export default function AuthCallback() {
         return;
       }
 
-      // If no URL errors, proceed with session extraction
-      const { data, error: sessionError } = await supabase.auth.getSessionFromUrl();
+      // Supabase with detectSessionInUrl: true automatically extracts session from URL
+      // Just wait a moment for session to be detected, then navigate
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
       if (sessionError) {
-        console.error('Session extraction error:', sessionError);
+        console.error('Session check error:', sessionError);
         navigate('/login', { 
           replace: true,
           state: { authError: sessionError.message } 
@@ -40,14 +43,15 @@ export default function AuthCallback() {
         return;
       }
 
-      if (data?.session) {
+      // If session exists, go to dashboard; otherwise go to login
+      if (session) {
         navigate('/', { replace: true });
       } else {
         navigate('/login', { replace: true });
       }
     };
 
-    handleLogin();
+    handleCallback();
   }, [navigate]);
 
   return (

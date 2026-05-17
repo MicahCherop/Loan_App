@@ -73,6 +73,15 @@ export default function DashboardLayout({ children }) {
 
         if (insertError) {
           console.error('Profile insert error:', insertError);
+          
+          // Check if it's an authorization/RLS error
+          if (insertError.code === 'PGRST001') {
+            // RLS policy denied insert - user not properly authorized
+            await supabase.auth.signOut();
+            navigate('/login', { replace: true });
+            throw new Error(`User not allowed. ${email} is not authorized to access Wekulo Credit. Please contact your administrator.`);
+          }
+          
           // Retry reading in case it was race condition
           const { data: retryData } = await supabase
             .from('profiles')
@@ -83,7 +92,7 @@ export default function DashboardLayout({ children }) {
             setProfile(retryData);
             return retryData;
           } else {
-            throw insertError;
+            throw new Error(`Failed to create user profile: ${insertError.message}`);
           }
         } else if (newProfile) {
           setProfile(newProfile);
@@ -127,13 +136,30 @@ export default function DashboardLayout({ children }) {
           }
         } else if (session) {
           setUser(session.user);
-          const activeProfile = await syncProfile(session.user);
-          if (!activeProfile) {
+          try {
+            const activeProfile = await syncProfile(session.user);
+            if (!activeProfile) {
+              setUser(null);
+              setIsLoading(false);
+              if (syncError) {
+                navigate('/login', { 
+                  replace: true,
+                  state: { authError: syncError }
+                });
+              }
+              return;
+            }
+            setIsLoading(false);
+          } catch (profileErr) {
+            console.error('Profile sync failed:', profileErr);
             setUser(null);
             setIsLoading(false);
+            navigate('/login', { 
+              replace: true,
+              state: { authError: profileErr.message || 'Failed to verify user authorization.' }
+            });
             return;
           }
-          setIsLoading(false);
         }
       } catch (err) {
         console.error('Auth state change error:', err);
