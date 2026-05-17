@@ -25,6 +25,10 @@ export default function DashboardLayout({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [syncError, setSyncError] = useState(null);
 
+  // ✅ FIX 1: Moved isMobileMenuOpen state ABOVE handleLogout so it's
+  // not in the temporal dead zone when handleLogout references setIsMobileMenuOpen.
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   // Global idle timeout (10 mins) + session timeout (15 mins)
   useIdleTimeout(() => {});
 
@@ -41,9 +45,33 @@ export default function DashboardLayout({ children }) {
     return userData.email || userData.user_metadata?.email || userData.user_metadata?.full_name || '';
   };
 
-  const getDisplayName = (email) => {
+  // ✅ FIX 2: getDisplayName now returns the full name from user_metadata
+  // when available (e.g. Google OAuth), falling back to the email prefix.
+  const getDisplayName = (userData, profileData) => {
+    // Prefer the full name stored in auth metadata (set during OAuth / sign-up)
+    const fullName =
+      userData?.user_metadata?.full_name ||
+      userData?.user_metadata?.name;
+    if (fullName) return fullName;
+
+    // Fall back to the email prefix, capitalised
+    const email = getEmailFromUser(userData) || profileData?.email || '';
     if (!email) return 'Officer';
-    return email.split('@')[0];
+    const prefix = email.split('@')[0];
+    return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+  };
+
+  // ✅ FIX 3: getRoleLabel derives the label from the resolved profile,
+  // avoiding the permanent "Officer" fallback when profile loads asynchronously.
+  const getRoleLabel = (profileData) => {
+    if (!profileData?.role) return '…';           // Still loading
+    const map = {
+      developer: 'Developer',
+      admin: 'Admin',
+      officer: 'Officer',
+      manager: 'Manager',
+    };
+    return map[profileData.role] ?? profileData.role;
   };
 
   const syncProfile = useCallback(async (userData) => {
@@ -97,7 +125,6 @@ export default function DashboardLayout({ children }) {
         setProfile(data);
         return data;
       } else if (noProfileFound) {
-        // Profile doesn't exist; auto-create with default role
         const role = isDeveloper ? 'developer' : 'officer';
 
         const { data: newProfile, error: insertError } = await supabase
@@ -109,7 +136,6 @@ export default function DashboardLayout({ children }) {
         if (insertError) {
           console.error('Profile insert error:', insertError);
           
-          // Retry reading in case it was race condition
           const { data: retryData } = await supabase
             .from('profiles')
             .select('*')
@@ -133,10 +159,9 @@ export default function DashboardLayout({ children }) {
       setSyncError(err.message || 'Failed to sync user profile. Data may not be visible.');
       setUser(null);
       setProfile(null);
-      // Don't sign out here; let the auth listener handle it
       return null;
     }
-  }, [navigate]);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -147,20 +172,15 @@ export default function DashboardLayout({ children }) {
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         if (!mounted) return;
 
-        if (sessionError) {
-          throw sessionError;
-        }
+        if (sessionError) throw sessionError;
 
         if (session) {
           setUser(session.user);
           const activeProfile = await syncProfile(session.user);
           if (!activeProfile) {
             setUser(null);
-            if (syncError && location.pathname !== '/login') {
-              navigate('/login', {
-                replace: true,
-                state: { authError: syncError }
-              });
+            if (mounted && location.pathname !== '/login') {
+              navigate('/login', { replace: true, state: { authError: syncError } });
             }
             return;
           }
@@ -205,11 +225,8 @@ export default function DashboardLayout({ children }) {
           if (!activeProfile) {
             setUser(null);
             setIsLoading(false);
-            if (syncError && location.pathname !== '/login') {
-              navigate('/login', {
-                replace: true,
-                state: { authError: syncError }
-              });
+            if (location.pathname !== '/login') {
+              navigate('/login', { replace: true, state: { authError: syncError } });
             }
             return;
           }
@@ -241,13 +258,12 @@ export default function DashboardLayout({ children }) {
     }
   };
 
+  // ✅ Now safe: setIsMobileMenuOpen is declared above this function.
   const handleLogout = async () => {
     try {
       setIsMobileMenuOpen(false);
       const { error } = await supabase.auth.signOut();
-      if (error) {
-        console.error('Logout error:', error);
-      }
+      if (error) console.error('Logout error:', error);
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
@@ -268,15 +284,16 @@ export default function DashboardLayout({ children }) {
   ];
 
   const effectiveEmail = user?.email || user?.user_metadata?.email || profile?.email || '';
-  const displayName = getDisplayName(effectiveEmail);
+  const normalizedEmail = normalizeEmail(effectiveEmail);
+  const isDeveloper = normalizedEmail === 'mic1dev.me@gmail.com';
 
-  // Add Admin if developer/admin
-  const isDeveloper = normalizeEmail(effectiveEmail) === 'mic1dev.me@gmail.com';
   if (isDeveloper || profile?.role === 'developer' || profile?.role === 'admin') {
     menuItems.push({ name: 'Admin', path: '/admin', icon: ShieldCheck });
   }
 
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  // ✅ Derived from both user auth metadata and profile row
+  const displayName = getDisplayName(user, profile);
+  const roleLabel = getRoleLabel(profile);
 
   if (isLoading) {
     return (
@@ -324,7 +341,7 @@ export default function DashboardLayout({ children }) {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-slate-700 truncate">{displayName}</p>
-              <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">{profile?.role || 'Officer'}</p>
+              <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">{roleLabel}</p>
             </div>
           </div>
           <button
@@ -379,7 +396,7 @@ export default function DashboardLayout({ children }) {
                 ))}
               </nav>
               <div className="p-4 border-t border-slate-100">
-                 <button
+                <button
                   onClick={handleLogout}
                   className="w-full flex items-center justify-center gap-2 py-3 text-rose-600 font-semibold text-sm"
                 >
@@ -409,7 +426,7 @@ export default function DashboardLayout({ children }) {
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex flex-col items-end text-right text-slate-600">
               <span className="font-medium text-slate-800">{displayName}</span>
-              <span className="text-[11px] uppercase tracking-[0.3em] text-slate-400">{profile?.role || 'Officer'}</span>
+              <span className="text-[11px] uppercase tracking-[0.3em] text-slate-400">{roleLabel}</span>
             </div>
             <button
               type="button"
