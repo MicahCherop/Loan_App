@@ -126,15 +126,27 @@ export default function DashboardLayout({ children }) {
       if (!mounted) return;
 
       try {
-        if (event === 'SIGNED_OUT' || !session) {
+        if (event === 'INITIAL_SESSION' && !session) {
           setUser(null);
           setProfile(null);
           setIsLoading(false);
-          // Only navigate if not already on login page
-          if (mounted && location.pathname !== '/login') {
+          if (location.pathname !== '/login') {
             navigate('/login', { replace: true });
           }
-        } else if (session) {
+          return;
+        }
+
+        if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+          setUser(null);
+          setProfile(null);
+          setIsLoading(false);
+          if (location.pathname !== '/login') {
+            navigate('/login', { replace: true });
+          }
+          return;
+        }
+
+        if (session) {
           setUser(session.user);
           try {
             const activeProfile = await syncProfile(session.user);
@@ -142,7 +154,7 @@ export default function DashboardLayout({ children }) {
               setUser(null);
               setIsLoading(false);
               if (syncError) {
-                navigate('/login', { 
+                navigate('/login', {
                   replace: true,
                   state: { authError: syncError }
                 });
@@ -154,7 +166,7 @@ export default function DashboardLayout({ children }) {
             console.error('Profile sync failed:', profileErr);
             setUser(null);
             setIsLoading(false);
-            navigate('/login', { 
+            navigate('/login', {
               replace: true,
               state: { authError: profileErr.message || 'Failed to verify user authorization.' }
             });
@@ -188,10 +200,7 @@ export default function DashboardLayout({ children }) {
 
   const handleLogout = async () => {
     try {
-      setUser(null);
-      setProfile(null);
       setIsMobileMenuOpen(false);
-      clearAuthStorage();
       const { error } = await supabase.auth.signOut();
       if (error) {
         console.error('Logout error:', error);
@@ -199,7 +208,9 @@ export default function DashboardLayout({ children }) {
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
-      // Navigate after clearing state
+      clearAuthStorage();
+      setUser(null);
+      setProfile(null);
       navigate('/login', { replace: true });
     }
   };
