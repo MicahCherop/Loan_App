@@ -25,13 +25,31 @@ export default function DashboardLayout({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [syncError, setSyncError] = useState(null);
 
-  // Global idle timeout (10 mins)
-  useIdleTimeout();
+  // Global idle timeout (10 mins) + session timeout (15 mins)
+  useIdleTimeout(() => {});
+
+  const normalizeEmail = (email) => {
+    if (!email) return '';
+    const lower = email.toLowerCase();
+    const [local, domain] = lower.split('@');
+    if (!local || !domain) return lower;
+    return `${local.split('+')[0]}@${domain}`;
+  };
+
+  const getEmailFromUser = (userData) => {
+    if (!userData) return '';
+    return userData.email || userData.user_metadata?.email || userData.user_metadata?.full_name || '';
+  };
+
+  const getDisplayName = (email) => {
+    if (!email) return 'Officer';
+    return email.split('@')[0];
+  };
 
   const syncProfile = useCallback(async (userData) => {
     try {
       setSyncError(null);
-      const email = userData.email?.toLowerCase();
+      const email = normalizeEmail(getEmailFromUser(userData));
       const isDeveloper = email === 'mic1dev.me@gmail.com';
       
       const { data, error } = await supabase
@@ -40,31 +58,48 @@ export default function DashboardLayout({ children }) {
         .eq('id', userData.id)
         .single();
 
+      const noProfileFound = error && (
+        error.code === 'PGRST116' ||
+        error.status === 406 ||
+        error.message?.toLowerCase().includes('0 rows') ||
+        error.message?.toLowerCase().includes('no rows')
+      );
+
       if (data) {
+        const needsUpdate =
+          data.email !== email ||
+          (isDeveloper && data.role !== 'developer');
+
+        if (needsUpdate) {
+          const updatePayload = { email };
+          if (isDeveloper) updatePayload.role = 'developer';
+
+          const { data: updatedData, error: updateError } = await supabase
+            .from('profiles')
+            .update(updatePayload)
+            .eq('id', userData.id)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.warn('Profile update warning:', updateError);
+          } else if (updatedData) {
+            setProfile(updatedData);
+            return updatedData;
+          }
+        }
+
+        if (isDeveloper && data.role !== 'developer') {
+          setProfile({ ...data, role: 'developer' });
+          return { ...data, role: 'developer' };
+        }
+
         setProfile(data);
         return data;
-      } else if (error && error.code === 'PGRST116') {
-        // Profile doesn't exist; check authorization
-        const { data: preAuth, error: preAuthError } = await supabase
-          .from('pre_authorized_emails')
-          .select('role')
-          .eq('email', email)
-          .maybeSingle();
+      } else if (noProfileFound) {
+        // Profile doesn't exist; auto-create with default role
+        const role = isDeveloper ? 'developer' : 'officer';
 
-        if (preAuthError && preAuthError.code !== 'PGRST116') {
-          throw preAuthError;
-        }
-
-        const role = isDeveloper ? 'developer' : preAuth?.role;
-
-        if (!role) {
-          console.warn(`User ${email} is not pre-authorized.`);
-          await supabase.auth.signOut();
-          navigate('/login', { replace: true });
-          throw new Error(`${email} is not authorized for Wekulo Credit. Contact your administrator.`);
-        }
-
-        // Create profile with proper role
         const { data: newProfile, error: insertError } = await supabase
           .from('profiles')
           .insert([{ id: userData.id, email, role }])
@@ -73,14 +108,6 @@ export default function DashboardLayout({ children }) {
 
         if (insertError) {
           console.error('Profile insert error:', insertError);
-          
-          // Check if it's an authorization/RLS error
-          if (insertError.code === 'PGRST001') {
-            // RLS policy denied insert - user not properly authorized
-            await supabase.auth.signOut();
-            navigate('/login', { replace: true });
-            throw new Error(`User not allowed. ${email} is not authorized to access Wekulo Credit. Please contact your administrator.`);
-          }
           
           // Retry reading in case it was race condition
           const { data: retryData } = await supabase
@@ -115,6 +142,41 @@ export default function DashboardLayout({ children }) {
     let mounted = true;
     let timeoutId;
 
+    const initializeSession = async () => {
+      try {
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (!mounted) return;
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        if (session) {
+          setUser(session.user);
+          const activeProfile = await syncProfile(session.user);
+          if (!activeProfile) {
+            setUser(null);
+            if (syncError && location.pathname !== '/login') {
+              navigate('/login', {
+                replace: true,
+                state: { authError: syncError }
+              });
+            }
+            return;
+          }
+        } else if (location.pathname !== '/login') {
+          navigate('/login', { replace: true });
+        }
+      } catch (err) {
+        console.error('Initial session error:', err);
+        if (mounted && location.pathname !== '/login') {
+          navigate('/login', { replace: true });
+        }
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    };
+
     timeoutId = window.setTimeout(() => {
       if (mounted) {
         console.warn('DashboardLayout: Auth check timed out. Forcing UI render.');
@@ -126,16 +188,6 @@ export default function DashboardLayout({ children }) {
       if (!mounted) return;
 
       try {
-        if (event === 'INITIAL_SESSION' && !session) {
-          setUser(null);
-          setProfile(null);
-          setIsLoading(false);
-          if (location.pathname !== '/login') {
-            navigate('/login', { replace: true });
-          }
-          return;
-        }
-
         if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
           setUser(null);
           setProfile(null);
@@ -146,30 +198,19 @@ export default function DashboardLayout({ children }) {
           return;
         }
 
-        if (session) {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+          if (!session) return;
           setUser(session.user);
-          try {
-            const activeProfile = await syncProfile(session.user);
-            if (!activeProfile) {
-              setUser(null);
-              setIsLoading(false);
-              if (syncError) {
-                navigate('/login', {
-                  replace: true,
-                  state: { authError: syncError }
-                });
-              }
-              return;
-            }
-            setIsLoading(false);
-          } catch (profileErr) {
-            console.error('Profile sync failed:', profileErr);
+          const activeProfile = await syncProfile(session.user);
+          if (!activeProfile) {
             setUser(null);
             setIsLoading(false);
-            navigate('/login', {
-              replace: true,
-              state: { authError: profileErr.message || 'Failed to verify user authorization.' }
-            });
+            if (syncError && location.pathname !== '/login') {
+              navigate('/login', {
+                replace: true,
+                state: { authError: syncError }
+              });
+            }
             return;
           }
         }
@@ -178,6 +219,8 @@ export default function DashboardLayout({ children }) {
         setIsLoading(false);
       }
     });
+
+    initializeSession();
 
     return () => {
       mounted = false;
@@ -211,7 +254,7 @@ export default function DashboardLayout({ children }) {
       clearAuthStorage();
       setUser(null);
       setProfile(null);
-      navigate('/login', { replace: true });
+      window.location.assign('/login');
     }
   };
 
@@ -224,8 +267,11 @@ export default function DashboardLayout({ children }) {
     { name: 'Reports', path: '/reports', icon: BarChart3 },
   ];
 
+  const effectiveEmail = user?.email || user?.user_metadata?.email || profile?.email || '';
+  const displayName = getDisplayName(effectiveEmail);
+
   // Add Admin if developer/admin
-  const isDeveloper = user?.email === 'mic1dev.me@gmail.com';
+  const isDeveloper = normalizeEmail(effectiveEmail) === 'mic1dev.me@gmail.com';
   if (isDeveloper || profile?.role === 'developer' || profile?.role === 'admin') {
     menuItems.push({ name: 'Admin', path: '/admin', icon: ShieldCheck });
   }
@@ -277,7 +323,7 @@ export default function DashboardLayout({ children }) {
               <Users size={18} className="text-slate-400" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-700 truncate">{user?.email?.split('@')[0] || 'Officer'}</p>
+              <p className="text-sm font-medium text-slate-700 truncate">{displayName}</p>
               <p className="text-[10px] text-slate-400 font-medium uppercase tracking-widest">{profile?.role || 'Officer'}</p>
             </div>
           </div>
@@ -362,7 +408,7 @@ export default function DashboardLayout({ children }) {
           </div>
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex flex-col items-end text-right text-slate-600">
-              <span className="font-medium text-slate-800">{user?.email?.split('@')[0] || 'Officer'}</span>
+              <span className="font-medium text-slate-800">{displayName}</span>
               <span className="text-[11px] uppercase tracking-[0.3em] text-slate-400">{profile?.role || 'Officer'}</span>
             </div>
             <button

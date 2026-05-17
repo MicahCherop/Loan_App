@@ -1,23 +1,13 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase.js';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { LogIn, Mail, Lock, AlertCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { AlertCircle } from 'lucide-react';
 import { motion } from 'motion/react';
 
 export default function Login() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const location = useLocation();
   const navigate = useNavigate();
-
-  useEffect(() => {
-    if (location.state?.authError) {
-      setError(location.state.authError);
-      window.history.replaceState({}, document.title);
-    }
-  }, [location.state]);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -49,7 +39,7 @@ export default function Login() {
       window.history.replaceState({}, document.title, '/login');
       setLoading(false);
     }
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     let authSubscription = null;
@@ -72,24 +62,6 @@ export default function Login() {
       }
     };
   }, [navigate]);
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-    } else {
-      navigate('/', { replace: true });
-    }
-  };
 
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -156,7 +128,7 @@ export default function Login() {
             <button
               onClick={handleGoogleLogin}
               disabled={loading}
-              className="w-full h-16 bg-white border-2 border-slate-100 rounded-2xl flex items-center justify-center gap-4 hover:bg-slate-50 transition-all active:scale-[0.98] shadow-sm group/btn"
+              className="w-full h-16 bg-white border-2 border-slate-100 rounded-2xl flex items-center justify-center gap-4 hover:bg-slate-50 transition-all active:scale-[0.98] shadow-sm group/btn disabled:opacity-50"
             >
               <svg className="w-6 h-6 transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24">
                 <path
@@ -176,66 +148,14 @@ export default function Login() {
                   fill="#EA4335"
                 />
               </svg>
-              <span className="font-bold text-slate-700">Continue with Google</span>
+              <span className="font-bold text-slate-700">
+                {loading ? 'Signing in...' : 'Continue with Google'}
+              </span>
             </button>
-
-            <div className="relative py-4">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-100"></div>
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-widest font-bold">
-                <span className="bg-white px-4 text-slate-300">Internal Access</span>
-              </div>
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-6">
-              <div className="space-y-1">
-                <div className="relative">
-                  <Mail className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pl-12 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:outline-none focus:border-blue-200 focus:bg-white transition-all text-xs font-medium text-slate-800 placeholder:text-slate-300"
-                    placeholder="Email Address"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="relative">
-                  <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300" size={16} />
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full pl-12 pr-6 py-4 bg-slate-50 border border-slate-100 rounded-2xl focus:outline-none focus:border-blue-200 focus:bg-white transition-all text-xs font-medium text-slate-800 placeholder:text-slate-300"
-                    placeholder="Password"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full bg-slate-800 text-white py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-slate-900 transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-lg active:scale-95"
-              >
-                {loading ? (
-                  <div className="w-5 h-5 border-4 border-white/20 border-t-white rounded-full animate-spin"></div>
-                ) : (
-                  <>
-                    <LogIn size={14} />
-                    Sign In
-                  </>
-                )}
-              </button>
-            </form>
           </div>
 
           <p className="mt-12 text-center text-[10px] font-bold uppercase tracking-widest text-slate-400">
-            Forgot access?{' '}
+            Need access?{' '}
             <button
               type="button"
               onClick={() => {

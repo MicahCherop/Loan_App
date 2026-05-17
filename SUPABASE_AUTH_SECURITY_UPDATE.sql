@@ -1,36 +1,34 @@
 -- Non-destructive auth/security update for an existing Wekulo Credit database.
 -- Paste this into Supabase SQL Editor after confirming your admin/developer email.
 
-CREATE TABLE IF NOT EXISTS public.pre_authorized_emails (
-  email TEXT PRIMARY KEY,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'officer')),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  created_by UUID REFERENCES auth.users(id)
-);
+-- Drop the old pre_authorized_emails table if it exists (optional, for cleanup)
+-- DROP TABLE IF EXISTS public.pre_authorized_emails;
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.leads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loan_requests ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.pre_authorized_emails ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION public.normalized_email(input_email TEXT)
+RETURNS TEXT AS $$
+  SELECT CASE
+    WHEN strpos(trim(input_email), '@') = 0 THEN lower(trim(input_email))
+    ELSE lower(regexp_replace(split_part(trim(input_email), '@', 1), '\+.*$', '')) || '@' || lower(split_part(trim(input_email), '@', 2))
+  END;
+$$ LANGUAGE sql IMMUTABLE STRICT;
 
 CREATE OR REPLACE FUNCTION public.authorized_role_for(user_email TEXT)
 RETURNS TEXT AS $$
   SELECT CASE
-    WHEN lower(user_email) = 'mic1dev.me@gmail.com' THEN 'developer'
-    ELSE (
-      SELECT role
-      FROM public.pre_authorized_emails
-      WHERE email = lower(user_email)
-      LIMIT 1
-    )
+    WHEN public.normalized_email(user_email) = 'mic1dev.me@gmail.com' THEN 'developer'
+    ELSE 'officer'
   END;
 $$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
 
 CREATE OR REPLACE FUNCTION public.is_platform_admin()
 RETURNS BOOLEAN AS $$
-  SELECT lower(coalesce(auth.jwt() ->> 'email', '')) = 'mic1dev.me@gmail.com'
+  SELECT public.normalized_email(coalesce(auth.jwt() ->> 'email', '')) = 'mic1dev.me@gmail.com'
     OR EXISTS (
       SELECT 1
       FROM public.profiles
@@ -46,14 +44,6 @@ RETURNS BOOLEAN AS $$
     FROM public.profiles
     WHERE id = auth.uid()
       AND role IN ('officer', 'admin', 'developer')
-      AND (
-        email = 'mic1dev.me@gmail.com'
-        OR EXISTS (
-          SELECT 1
-          FROM public.pre_authorized_emails
-          WHERE pre_authorized_emails.email = profiles.email
-        )
-      )
   );
 $$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
 
@@ -91,11 +81,15 @@ CREATE POLICY "Admins can manage profiles" ON public.profiles
   WITH CHECK (public.is_platform_admin());
 
 CREATE POLICY "Users can check their own authorization" ON public.pre_authorized_emails
-  FOR SELECT USING (email = lower(auth.jwt() ->> 'email') OR public.is_platform_admin());
+  FOR SELECT USING (email = public.normalized_email(auth.jwt() ->> 'email') OR public.is_platform_admin());
 
 CREATE POLICY "Admins can manage pre-authorizations" ON public.pre_authorized_emails
   FOR ALL USING (public.is_platform_admin())
   WITH CHECK (public.is_platform_admin());
+
+CREATE POLICY "Users can update their own profile" ON public.profiles
+  FOR UPDATE USING (auth.uid() = id)
+  WITH CHECK (auth.uid() = id AND role = public.authorized_role_for(email));
 
 CREATE POLICY "Allow authorized leads access" ON public.leads
   FOR ALL USING (public.is_platform_user())
