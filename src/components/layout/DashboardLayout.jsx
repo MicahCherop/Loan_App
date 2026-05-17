@@ -312,7 +312,7 @@ export default function DashboardLayout({ children }) {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-semibold">
               W
             </div>
-            <span className="font-semibold text-lg text-slate-800">Wekulo Credit</span>
+            <span className="font-semibold text-lg text-slate-800">RFG CAPITAL LTD</span>
           </Link>
         </div>
 

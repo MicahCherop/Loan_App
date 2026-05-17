@@ -151,7 +151,7 @@ export default function Login() {
             </div>
           </div>
 
-          <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">Wekulo Credit</h2>
+          <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">RFG CAPITAL LTD</h2>
           <p className="text-slate-400 text-center text-sm mb-12">Authorized Personnel Only</p>
 
           {error && (
@@ -193,7 +193,7 @@ export default function Login() {
               type="button"
               onClick={() => {
                 window.location.href =
-                  'mailto:mic1dev.me@gmail.com?subject=Wekulo%20Credit%20access%20request';
+                  'mailto:mic1dev.me@gmail.com?subject=RFG%20CAPITAL%20LTD%20Access%20Request';
               }}
               className="text-blue-500 hover:underline"
             >
