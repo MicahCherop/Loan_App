@@ -374,7 +374,7 @@ export default function DashboardLayout({ children }) {
               <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                 <Link to="/" className="flex items-center gap-2">
                   <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-semibold">W</div>
-                  <span className="font-semibold text-lg text-slate-800">Wekulo</span>
+                  <span className="font-semibold text-lg text-slate-800">RFG CAPITAL LTD</span>
                 </Link>
                 <button onClick={() => setIsMobileMenuOpen(false)} className="text-slate-400 hover:text-slate-600">
                   <X size={20} />

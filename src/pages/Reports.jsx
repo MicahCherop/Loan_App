@@ -50,7 +50,7 @@ export default function Reports() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'wekulo-credit-report.csv';
+    link.download = 'rfg-capital-ltd-report.csv';
     link.click();
     URL.revokeObjectURL(url);
   };
