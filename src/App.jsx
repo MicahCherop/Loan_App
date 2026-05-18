@@ -3,25 +3,22 @@ import { useEffect, useState } from 'react';
 import { supabase } from './lib/supabase.js';
 
 import DashboardLayout from './components/layout/DashboardLayout.jsx';
-import Login from './pages/Login.jsx';
-import AuthCallback from './pages/auth/callback.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Leads from './pages/Leads.jsx';
-import Customers from './pages/Customers.jsx';
-import CustomerDetail from './pages/CustomerDetail.jsx';
-import ActiveLoans from './pages/ActiveLoans.jsx';
-import LoanRequests from './pages/LoanRequests.jsx';
-import Reports from './pages/Reports.jsx';
-import NewLoan from './pages/NewLoan.jsx';
-import Admin from './pages/Admin.jsx';
+import Login           from './pages/Login.jsx';
+import AuthCallback    from './pages/auth/callback.jsx';
+import Dashboard       from './pages/Dashboard.jsx';
+import Leads           from './pages/Leads.jsx';
+import Customers       from './pages/Customers.jsx';
+import CustomerDetail  from './pages/CustomerDetail.jsx';
+import ActiveLoans     from './pages/ActiveLoans.jsx';
+import LoanRequests    from './pages/LoanRequests.jsx';
+import Reports         from './pages/Reports.jsx';
+import NewLoan         from './pages/NewLoan.jsx';
+import Admin           from './pages/Admin.jsx';
+import Repayments      from './pages/Repayments.jsx';
+import LoanProducts    from './pages/LoanProducts.jsx';
 
-// ✅ FIX 1: ProtectedRoute checks for a live Supabase session before rendering
-// children. If there's no session it redirects to /login immediately, without
-// relying on DashboardLayout's internal navigate() as the only safety net.
-// Shows a neutral spinner while the async session check is in flight so the
-// protected page never flashes to unauthenticated users.
 function ProtectedRoute() {
-  const [status, setStatus] = useState('checking'); // 'checking' | 'authed' | 'unauthed'
+  const [status, setStatus] = useState('checking');
 
   useEffect(() => {
     let mounted = true;
@@ -36,10 +33,7 @@ function ProtectedRoute() {
       setStatus(session ? 'authed' : 'unauthed');
     });
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
+    return () => { mounted = false; subscription.unsubscribe(); };
   }, []);
 
   if (status === 'checking') {
@@ -50,13 +44,8 @@ function ProtectedRoute() {
     );
   }
 
-  if (status === 'unauthed') {
-    return <Navigate to="/login" replace />;
-  }
+  if (status === 'unauthed') return <Navigate to="/login" replace />;
 
-  // ✅ FIX 2: <Outlet /> renders the matched child route inside DashboardLayout.
-  // DashboardLayout is declared here once — not repeated on every route —
-  // so it never re-mounts when navigating between pages.
   return (
     <DashboardLayout>
       <Outlet />
@@ -68,11 +57,11 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        {/* Public routes */}
-        <Route path="/login" element={<Login />} />
+        {/* Public */}
+        <Route path="/login"         element={<Login />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
 
-        {/* Protected routes — all share ONE DashboardLayout instance */}
+        {/* Protected — all share one DashboardLayout instance */}
         <Route element={<ProtectedRoute />}>
           <Route path="/"               element={<Dashboard />} />
           <Route path="/leads"          element={<Leads />} />
@@ -80,12 +69,13 @@ export default function App() {
           <Route path="/customers/:id"  element={<CustomerDetail />} />
           <Route path="/active-loans"   element={<ActiveLoans />} />
           <Route path="/requests"       element={<LoanRequests />} />
+          <Route path="/repayments"     element={<Repayments />} />
+          <Route path="/loan-products"  element={<LoanProducts />} />
           <Route path="/reports"        element={<Reports />} />
           <Route path="/new-loan"       element={<NewLoan />} />
           <Route path="/admin"          element={<Admin />} />
         </Route>
 
-        {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Router>

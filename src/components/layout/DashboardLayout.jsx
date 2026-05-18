@@ -275,12 +275,14 @@ export default function DashboardLayout({ children }) {
   };
 
   const menuItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
-    { name: 'Leads', path: '/leads', icon: UserPlus },
-    { name: 'Customers', path: '/customers', icon: Users },
-    { name: 'Active Loans', path: '/active-loans', icon: ClipboardList },
-    { name: 'Loan Requests', path: '/requests', icon: Bell },
-    { name: 'Reports', path: '/reports', icon: BarChart3 },
+    { name: 'Dashboard',     path: '/',              icon: LayoutDashboard },
+    { name: 'Leads',         path: '/leads',         icon: UserPlus        },
+    { name: 'Customers',     path: '/customers',     icon: Users           },
+    { name: 'Active Loans',  path: '/active-loans',  icon: ClipboardList   },
+    { name: 'Loan Requests', path: '/requests',      icon: Bell            },
+    { name: 'Repayments',    path: '/repayments',    icon: BarChart3       },
+    { name: 'Loan Products', path: '/loan-products', icon: ClipboardList   },
+    { name: 'Reports',       path: '/reports',       icon: BarChart3       },
   ];
 
   const effectiveEmail = user?.email || user?.user_metadata?.email || profile?.email || '';
@@ -312,7 +314,7 @@ export default function DashboardLayout({ children }) {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-semibold">
               W
             </div>
-            <span className="font-semibold text-lg text-slate-800">RFG CAPITAL LTD</span>
+            <span className="font-semibold text-lg text-slate-800">Wekulo Credit</span>
           </Link>
         </div>
 
@@ -374,7 +376,7 @@ export default function DashboardLayout({ children }) {
               <div className="p-6 border-b border-slate-100 flex items-center justify-between">
                 <Link to="/" className="flex items-center gap-2">
                   <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-semibold">W</div>
-                  <span className="font-semibold text-lg text-slate-800">RFG CAPITAL LTD</span>
+                  <span className="font-semibold text-lg text-slate-800">Wekulo</span>
                 </Link>
                 <button onClick={() => setIsMobileMenuOpen(false)} className="text-slate-400 hover:text-slate-600">
                   <X size={20} />
