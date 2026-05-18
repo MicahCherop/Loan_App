@@ -66,7 +66,7 @@ export default function Dashboard() {
           supabase.from('loans').select('*', { count: 'exact', head: true }).eq('status', 'active'),
           supabase.from('loan_requests').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
           supabase.from('loans').select('amount').in('status', ['active', 'disbursed']),
-          supabase.from('loan_requests').select('*, customers(full_name, phone)').eq('status', 'pending').order('created_at', { ascending: true }).limit(1).maybeSingle(),
+          supabase.from('loan_requests').select('*, customers(name, phone)').eq('status', 'pending').order('created_at', { ascending: true }).limit(1).maybeSingle(),
           supabase.from('loans').select('amount, created_at').gte('created_at', since).order('created_at', { ascending: true }),
           supabase.from('repayments').select('amount, created_at').gte('created_at', since).order('created_at', { ascending: true }),
           // Loans due today
@@ -237,11 +237,11 @@ export default function Dashboard() {
             <div className="bg-white border border-white/10 rounded-2xl p-4 sm:p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
               <div className="flex items-center gap-3 sm:gap-5">
                 <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold text-lg shrink-0">
-                  {(priorityRequest.customers?.full_name || priorityRequest.customer_name || '?').charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <div className="font-semibold text-sm sm:text-lg text-slate-800">
-                    {priorityRequest.customers?.full_name || priorityRequest.customer_name || 'Unknown Customer'}
+                    {(priorityRequest.customers?.name || priorityRequest.customer_name || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-sm sm:text-lg text-slate-800">
+                      {priorityRequest.customers?.name || priorityRequest.customer_name || 'Unknown Customer'}
                   </div>
                   <div className="text-slate-500 text-[10px] sm:text-sm mt-1">
                     Requesting: <span className="text-slate-800 font-medium">{formatKES(priorityRequest.amount)}</span>

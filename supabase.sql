@@ -2,6 +2,7 @@
 -- Paste this into your Supabase SQL Editor
 
 -- 1. Reset everything to ensure a clean state
+DROP TABLE IF EXISTS repayments CASCADE;
 DROP TABLE IF EXISTS loans CASCADE;
 DROP TABLE IF EXISTS loan_requests CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
@@ -58,7 +59,20 @@ CREATE TABLE loans (
   officer_id UUID REFERENCES auth.users(id)
 );
 
--- 6. Create Repeat Loan Requests Table
+-- 6. Create Repayments Table
+CREATE TABLE repayments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  loan_id UUID REFERENCES loans(id) ON DELETE CASCADE,
+  customer_id UUID REFERENCES customers(id) ON DELETE SET NULL,
+  amount NUMERIC NOT NULL,
+  method TEXT DEFAULT 'cash' CHECK (method IN ('cash', 'mpesa', 'bank', 'cheque')),
+  reference TEXT,
+  note TEXT,
+  officer_id UUID REFERENCES auth.users(id)
+);
+
+-- 7. Create Repeat Loan Requests Table
 CREATE TABLE loan_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -74,6 +88,7 @@ ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE repayments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loan_requests ENABLE ROW LEVEL SECURITY;
 
 -- 8. Security helper functions and policies
@@ -144,6 +159,10 @@ CREATE POLICY "Allow authorized customers access" ON customers
   WITH CHECK (public.is_platform_user());
 
 CREATE POLICY "Allow authorized loans access" ON loans
+  FOR ALL USING (public.is_platform_user())
+  WITH CHECK (public.is_platform_user());
+
+CREATE POLICY "Allow authorized repayments access" ON repayments
   FOR ALL USING (public.is_platform_user())
   WITH CHECK (public.is_platform_user());
 
