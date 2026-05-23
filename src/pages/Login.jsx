@@ -64,9 +64,22 @@ export default function Login() {
       // 1. Already have a session? Go straight to dashboard.
       let session;
       try {
-        const result = await supabase.auth.getSession();
-        session = result?.data?.session;
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise((resolve) =>
+          window.setTimeout(() => resolve({ timeout: true }), 7000)
+        );
+
+        const result = await Promise.race([sessionPromise, timeoutPromise]);
         if (!mounted) return;
+
+        if (result?.timeout) {
+          console.warn('Login session check timed out.');
+          setError('Unable to check sign-in status. Please refresh the page.');
+          setLoading(false);
+          return;
+        }
+
+        session = result?.data?.session;
         if (!result?.error && session) {
           navigate('/', { replace: true });
           return;

@@ -182,9 +182,19 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let mounted = true;
+    const timeoutMs = 7000;
+    const timeoutId = window.setTimeout(() => {
+      if (!mounted) return;
+      console.warn('Auth session bootstrap timed out. Falling back to ready state.');
+      setAuthError('Authentication initialization timed out.');
+      setStatus('ready');
+    }, timeoutMs);
+
+    const clearBootstrapTimeout = () => { window.clearTimeout(timeoutId); };
 
     supabase.auth.getSession()
       .then(({ data: { session }, error }) => {
+        clearBootstrapTimeout();
         if (!mounted) return;
         if (error) {
           setAuthError(error.message);
@@ -194,6 +204,7 @@ export function AuthProvider({ children }) {
         applySession(session);
       })
       .catch((err) => {
+        clearBootstrapTimeout();
         if (!mounted) return;
         console.error('Auth session bootstrap error:', err);
         setAuthError(err?.message || 'Failed to initialize authentication.');
