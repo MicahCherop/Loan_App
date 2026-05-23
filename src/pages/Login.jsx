@@ -62,10 +62,20 @@ export default function Login() {
 
     const initialize = async () => {
       // 1. Already have a session? Go straight to dashboard.
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      if (!mounted) return;
-      if (!sessionError && session) {
-        navigate('/', { replace: true });
+      let session;
+      try {
+        const result = await supabase.auth.getSession();
+        session = result?.data?.session;
+        if (!mounted) return;
+        if (!result?.error && session) {
+          navigate('/', { replace: true });
+          return;
+        }
+      } catch (err) {
+        if (!mounted) return;
+        console.error('Login session bootstrap error:', err);
+        setError(err?.message || 'Unable to check sign-in status.');
+        setLoading(false);
         return;
       }
 

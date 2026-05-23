@@ -183,11 +183,22 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
-      if (!mounted) return;
-      if (error) { setAuthError(error.message); setStatus('error'); return; }
-      applySession(session);
-    });
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        if (!mounted) return;
+        if (error) {
+          setAuthError(error.message);
+          setStatus('error');
+          return;
+        }
+        applySession(session);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        console.error('Auth session bootstrap error:', err);
+        setAuthError(err?.message || 'Failed to initialize authentication.');
+        setStatus('error');
+      });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
