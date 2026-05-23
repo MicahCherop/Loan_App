@@ -76,13 +76,12 @@ export function AuthProvider({ children }) {
     syncingRef.current = true;
 
     try {
-      const email    = normalizeEmail(resolveEmail(authUser));
-      const isDev    = email === DEV_EMAIL;
-      const authName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || null;
+      const email = normalizeEmail(resolveEmail(authUser));
+      const isDev = email === DEV_EMAIL;
 
       const { data: existing, error: fetchErr } = await supabase
         .from('profiles')
-        .select('*')
+        .select('id, email, role, created_at')
         .eq('id', authUser.id)
         .maybeSingle();
 
@@ -90,17 +89,15 @@ export function AuthProvider({ children }) {
 
       if (existing) {
         const patches = {};
-        if (existing.email !== email)               patches.email     = email;
-        if (authName && !existing.full_name)        patches.full_name = authName;
-        if (isDev && existing.role !== 'developer') patches.role      = 'developer';
-        if (isDev && existing.status !== 'verified') patches.status   = 'verified';
+        if (existing.email !== email)               patches.email = email;
+        if (isDev && existing.role !== 'developer') patches.role  = 'developer';
 
         if (Object.keys(patches).length > 0) {
           const { data: patched, error: patchErr } = await supabase
             .from('profiles')
             .update(patches)
             .eq('id', authUser.id)
-            .select()
+            .select('id, email, role, created_at')
             .single();
 
           if (patchErr) {
@@ -112,29 +109,15 @@ export function AuthProvider({ children }) {
         return existing;
       }
 
-      const newRole   = isDev ? 'developer' : 'officer';
-      const newStatus = isDev ? 'verified'  : 'pending';
-
-      const { data: created, error: insertErr } = await supabase
+      // The Supabase auth trigger should create the profile automatically.
+      const { data: retried, error: retryErr } = await supabase
         .from('profiles')
-        .insert([{
-          id:        authUser.id,
-          email,
-          role:      newRole,
-          status:    newStatus,
-          ...(authName ? { full_name: authName } : {}),
-        }])
-        .select()
-        .single();
+        .select('id, email, role, created_at')
+        .eq('id', authUser.id)
+        .maybeSingle();
 
-      if (insertErr) {
-        console.warn('Profile insert error (retrying read):', insertErr);
-        const { data: retried } = await supabase
-          .from('profiles').select('*').eq('id', authUser.id).maybeSingle();
-        return retried ?? null;
-      }
-
-      return created;
+      if (retryErr) throw retryErr;
+      return retried ?? null;
     } catch (err) {
       console.error('syncProfile error:', err);
       throw err;
@@ -152,20 +135,18 @@ export function AuthProvider({ children }) {
       const profileData = await syncProfile(session.user);
 
       if (!profileData) {
+        console.warn('No profile found for user:', authUser.id);
+        await supabase.auth.signOut();
+        setAuthError('Your account is not authorized. Please contact an administrator.');
         setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
         return;
       }
 
-      if (profileData.status === 'pending') {
+      if (!['developer', 'admin', 'officer'].includes(profileData.role)) {
+        console.warn('User profile has invalid role:', profileData.role);
         await supabase.auth.signOut();
-        setApprovalState('pending');
-        setUser(null); setProfile(null); setStatus('ready');
-        return;
-      }
-      if (profileData.status === 'blocked') {
-        await supabase.auth.signOut();
-        setApprovalState('blocked');
-        setUser(null); setProfile(null); setStatus('ready');
+        setAuthError('Your account role is not authorized. Please contact an administrator.');
+        setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
         return;
       }
 
@@ -242,7 +223,7 @@ export function AuthProvider({ children }) {
   const roleLabel   = profile?.role ? (ROLE_LABELS[profile.role] ?? profile.role) : '…';
   const isDeveloper = profile?.role === 'developer' || normalizeEmail(resolveEmail(user)) === DEV_EMAIL;
   const isAdmin     = profile?.role === 'admin';
-  const isAuthed    = status === 'ready' && !!user && !!profile && profile.status === 'verified';
+  const isAuthed    = status === 'ready' && !!user && !!profile && ['developer', 'admin', 'officer'].includes(profile.role);
 
   const refreshProfile = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
