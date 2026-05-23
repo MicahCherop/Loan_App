@@ -3,13 +3,14 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Public sign-in page. Only Google OAuth is supported.
  *
- * Fixes:
- *  • No blind setTimeout — uses onAuthStateChange + getSession properly.
- *  • PKCE code exchange handled explicitly via exchangeCodeForSession.
- *  • URL error params (error_description etc.) parsed and shown inline.
- *  • Router state authError (passed from approval walls) shown on mount.
- *  • Loading state resets correctly on every error path.
- *  • Double-submit prevented: loading=true blocks the button until redirect fires.
+ * FIXES applied:
+ *  [F1] OAuth code exchange is ONLY handled in AuthCallback — Login never calls
+ *       exchangeCodeForSession. Doing it in both caused "code already used" errors.
+ *  [F2] No blind setTimeout — uses onAuthStateChange + getSession correctly.
+ *  [F3] URL error params (error_description etc.) parsed and shown inline.
+ *  [F4] Router state authError (from approval walls / AuthCallback) shown on mount.
+ *  [F5] Loading state resets correctly on every error path.
+ *  [F6] Double-submit prevented: loading=true blocks the button until redirect fires.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -21,29 +22,29 @@ import { motion } from 'motion/react';
 export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
-  const navigate  = useNavigate();
-  const location  = useLocation();
-  // Guard against double-invocation in React StrictMode
-  const handledRef = useRef(false);
+  const navigate   = useNavigate();
+  const location   = useLocation();
+  const handledRef = useRef(false); // StrictMode guard
 
-  // ── Read authError passed via router state (e.g. from approval walls) ──────
+  // [F4] Show errors passed via router state (e.g. from approval walls, AuthCallback)
   useEffect(() => {
     if (location.state?.authError) {
       setError(location.state.authError);
+      // Clear state so a refresh doesn't re-show it
       window.history.replaceState({}, document.title, '/login');
     }
   }, [location.state]);
 
-  // ── Parse OAuth error params appended to the URL by Supabase / Google ──────
+  // [F3] Parse OAuth error params appended to the URL by Supabase / Google
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const hash   = window.location.hash.startsWith('#')
       ? new URLSearchParams(window.location.hash.slice(1))
       : new URLSearchParams();
 
-    const urlError     = params.get('error')             || hash.get('error');
-    const errorCode    = params.get('error_code')        || hash.get('error_code');
-    const errorDesc    = params.get('error_description') || hash.get('error_description');
+    const urlError  = params.get('error')             || hash.get('error');
+    const errorCode = params.get('error_code')        || hash.get('error_code');
+    const errorDesc = params.get('error_description') || hash.get('error_description');
 
     if (urlError || errorDesc) {
       const msg = decodeURIComponent(errorDesc || urlError || 'Google sign-in failed.');
@@ -53,16 +54,15 @@ export default function Login() {
     }
   }, []);
 
-  // ── Core auth bootstrap ────────────────────────────────────────────────────
+  // ── Core auth bootstrap ───────────────────────────────────────────────────
   useEffect(() => {
-    if (handledRef.current) return; // StrictMode guard
+    if (handledRef.current) return;
     handledRef.current = true;
 
     let mounted = true;
 
     const initialize = async () => {
-      // 1. Already have a session? Go straight to dashboard.
-      let session;
+      // Already have a session? Go straight to the dashboard.
       try {
         const sessionPromise = supabase.auth.getSession();
         const timeoutPromise = new Promise((resolve) =>
@@ -73,14 +73,13 @@ export default function Login() {
         if (!mounted) return;
 
         if (result?.timeout) {
-          console.warn('Login session check timed out.');
-          setError('Unable to check sign-in status. Please refresh the page.');
+          console.warn('Login: session check timed out.');
+          setError('Unable to check sign-in status. Please refresh.');
           setLoading(false);
           return;
         }
 
-        session = result?.data?.session;
-        if (!result?.error && session) {
+        if (!result?.error && result?.data?.session) {
           navigate('/', { replace: true });
           return;
         }
@@ -92,33 +91,19 @@ export default function Login() {
         return;
       }
 
-      // 2. OAuth callback: Supabase appends ?code= or #access_token= after redirect.
-      //    We must resolve the callback and store the session before routing.
-      const hasPKCECode     = window.location.search.includes('code=');
-      const hasImplicitToken = window.location.hash.includes('access_token');
-      if (hasPKCECode || hasImplicitToken) {
-        setLoading(true);
-        let response;
-        if (typeof supabase.auth.getSessionFromUrl === 'function') {
-          response = await supabase.auth.getSessionFromUrl({ storeSession: true });
-        } else {
-          response = await supabase.auth.exchangeCodeForSession(window.location.href);
-        }
-
-        if (!mounted) return;
-        if (response.error) {
-          setError(response.error.message || 'Sign-in failed. Please try again.');
-          setLoading(false);
-        } else if (response.data?.session) {
-          navigate('/', { replace: true });
-        }
-        return;
+      // [F1] Do NOT handle ?code= here — AuthCallback owns that exchange.
+      // Attempting to call exchangeCodeForSession on the Login page after
+      // AuthCallback already consumed the code causes the 400 PKCE error.
+      // If we somehow land on /login with a code in the URL, just strip it.
+      if (window.location.search.includes('code=')) {
+        window.history.replaceState({}, document.title, '/login');
       }
 
       setLoading(false);
     };
 
-    // 3. Listen for SIGNED_IN fired by Supabase after OAuth redirect completes
+    // Listen for SIGNED_IN fired by Supabase (covers the OAuth redirect case
+    // where the user returns to the app and the event fires before initialize()).
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
       if (event === 'SIGNED_IN' && session) {
@@ -136,7 +121,7 @@ export default function Login() {
     };
   }, [navigate]);
 
-  // ── Trigger Google OAuth ───────────────────────────────────────────────────
+  // ── Trigger Google OAuth ──────────────────────────────────────────────────
   const handleGoogleLogin = async () => {
     setLoading(true);
     setError(null);
@@ -159,8 +144,8 @@ export default function Login() {
           : oauthError.message
       );
       setLoading(false);
-      // If no error: browser is navigating to Google — keep loading=true so the
-      // button stays disabled and prevents double-click.
+      // [F6] If no error: browser is navigating to Google — keep loading=true so
+      // the button stays disabled and prevents a double-click race.
     }
   };
 

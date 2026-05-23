@@ -10,12 +10,19 @@
  *       'blocked'  → sign out immediately, show blocked wall
  *       'verified' → grant access, expose user/profile/displayName/roleLabel
  *  3. onAuthStateChange() reacts to future sign-in / sign-out / token refresh.
- *  4. logout() signs out, clears localStorage, hard-navigates to /login.
+ *  4. logout() signs out, clears localStorage (PKCE-safe), hard-navigates to /login.
  *
  * Exported:
  *   AuthProvider   – wrap your app tree
  *   useAuth()      – hook for any component
  *   logAudit()     – fire-and-forget audit helper
+ *
+ * FIXES applied vs previous versions:
+ *  [F1] logout() no longer wipes PKCE code-verifier keys — only post-session keys.
+ *  [F2] syncProfile() inserts a new profile row when none exists (was missing in v1).
+ *  [F3] applySession() no longer signs the user out when profile is null (race guard).
+ *  [F4] Bootstrap timeout added so the app never hangs on network failure.
+ *  [F5] isAuthed gates on profile.status === 'verified', not just role membership.
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
@@ -40,13 +47,13 @@ const ROLE_LABELS = {
   manager:   'Manager',
 };
 
-// ─── Pure helpers (no side-effects) ──────────────────────────────────────────
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
 function normalizeEmail(email) {
   if (!email) return '';
   const lower = email.toLowerCase();
   const [local, domain] = lower.split('@');
   if (!local || !domain) return lower;
-  // Strip Gmail + aliases (john+work@gmail.com → john@gmail.com)
+  // Strip Gmail + aliases: john+work@gmail.com → john@gmail.com
   return `${local.split('+')[0]}@${domain}`;
 }
 
@@ -57,7 +64,6 @@ function resolveEmail(user) {
 /**
  * resolveDisplayName
  * Priority: profiles.full_name → Google full_name → Google name → email prefix
- * This is what the sidebar, header, and Admin table all display.
  */
 function resolveDisplayName(user, profile) {
   if (profile?.full_name)             return profile.full_name;
@@ -66,7 +72,6 @@ function resolveDisplayName(user, profile) {
   const email = resolveEmail(user) || profile?.email || '';
   if (!email) return 'User';
   const prefix = email.split('@')[0];
-  // Capitalise first letter so "jane.wanjiku" → "Jane.wanjiku"
   return prefix.charAt(0).toUpperCase() + prefix.slice(1);
 }
 
@@ -82,7 +87,6 @@ export async function logAudit(supabaseClient, { action, entity, entityId, paylo
       payload:   { ...payload, _ts: new Date().toISOString() },
     }]);
   } catch (err) {
-    // Audit failures must NEVER break the main flow
     console.warn('Audit log error (non-fatal):', err.message);
   }
 }
@@ -99,41 +103,38 @@ export function AuthProvider({ children }) {
   const syncingRef = useRef(false);
 
   // ── syncProfile ─────────────────────────────────────────────────────────────
-  // Fetches the profile row by auth user ID.
-  // If the row exists → patches any stale fields (email, full_name, role for dev).
-  // If no row → inserts a new one with status='pending' (or 'verified' for the dev).
-  // Returns the final profile object, or null on hard failure.
+  // Fetches or creates the profile row for the given auth user.
+  // Returns the final profile object, or null on unrecoverable failure.
   const syncProfile = useCallback(async (authUser) => {
-    if (!authUser)             return null;
-    if (syncingRef.current)    return null;
+    if (!authUser)          return null;
+    if (syncingRef.current) return null;
     syncingRef.current = true;
 
     try {
-      const email    = normalizeEmail(resolveEmail(authUser));
-      const isDev    = email === DEV_EMAIL;
+      const email   = normalizeEmail(resolveEmail(authUser));
+      const isDev   = email === DEV_EMAIL;
       const authName = authUser.user_metadata?.full_name
                     || authUser.user_metadata?.name
                     || null;
 
-      // ── 1. Attempt to load existing row ────────────────────────────────────
+      // ── 1. Try to load existing row ────────────────────────────────────────
       const { data: existing, error: fetchErr } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', authUser.id)
-        .maybeSingle(); // never throws on 0 rows
+        .maybeSingle();
 
       if (fetchErr) throw fetchErr;
 
       if (existing) {
-        // ── 1a. Patch any stale or missing fields ───────────────────────────
+        // ── 1a. Patch any stale fields ─────────────────────────────────────
         const patches = {};
         if (existing.email !== email)                patches.email     = email;
         if (authName && !existing.full_name)         patches.full_name = authName;
         if (isDev && existing.role !== 'developer')  patches.role      = 'developer';
-        // Developer account is always auto-verified
         if (isDev && existing.status !== 'verified') patches.status    = 'verified';
 
-        if (Object.keys(patches).length === 0) return existing; // nothing to change
+        if (Object.keys(patches).length === 0) return existing;
 
         const { data: patched, error: patchErr } = await supabase
           .from('profiles')
@@ -150,8 +151,9 @@ export function AuthProvider({ children }) {
         return patched;
       }
 
-      // ── 2. No row found — create it ────────────────────────────────────────
-      // New officers land in 'pending'; the dev account is always 'verified'.
+      // ── 2. No row found — insert a new one ────────────────────────────────
+      // [F2] This block was completely absent in v1, causing "No profile found" errors.
+      // New users land as 'pending' officers; the dev account is always 'verified'.
       const insertPayload = {
         id:     authUser.id,
         email,
@@ -167,7 +169,7 @@ export function AuthProvider({ children }) {
         .single();
 
       if (insertErr) {
-        // Race condition: another tab / request beat us — retry the read
+        // Race condition: another tab / DB trigger beat us — retry the read
         console.warn('Profile insert conflict, retrying read:', insertErr.message);
         const { data: retried } = await supabase
           .from('profiles')
@@ -180,15 +182,14 @@ export function AuthProvider({ children }) {
       return created;
     } catch (err) {
       console.error('syncProfile hard error:', err);
-      throw err; // bubble up to applySession for proper error handling
+      throw err;
     } finally {
       syncingRef.current = false;
     }
   }, []);
 
-  // ── applySession ─────────────────────────────────────────────────────────────
+  // ── applySession ──────────────────────────────────────────────────────────
   // Core gate: called after every session event.
-  // Determines whether the user may enter the app or hits an approval/block wall.
   const applySession = useCallback(async (session) => {
     if (!session) {
       setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
@@ -198,15 +199,16 @@ export function AuthProvider({ children }) {
     try {
       const profileData = await syncProfile(session.user);
 
+      // [F3] v1 signed the user out here; v2 treats null as a transient race
+      // condition and lets the user retry rather than killing their session.
       if (!profileData) {
-        // syncProfile returned null (race condition / network issue)
+        console.warn('syncProfile returned null for user:', session.user?.id);
         setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
         return;
       }
 
       // ── ZERO-TRUST GATE ───────────────────────────────────────────────────
       if (profileData.status === 'pending') {
-        // Kill the Supabase session so the auth cookie is cleared
         await supabase.auth.signOut();
         setApprovalState('pending');
         setUser(null); setProfile(null); setStatus('ready');
@@ -233,18 +235,34 @@ export function AuthProvider({ children }) {
     }
   }, [syncProfile]);
 
-  // ── Bootstrap on mount + subscribe to future auth events ─────────────────
+  // ── Bootstrap + auth event subscription ──────────────────────────────────
   useEffect(() => {
     let mounted = true;
 
-    // Initial session check (handles page refresh / direct URL visits)
-    supabase.auth.getSession().then(({ data: { session }, error }) => {
+    // [F4] Timeout guard — never hang forever if Supabase is unreachable
+    const timeoutMs = 8000;
+    const timeoutId = window.setTimeout(() => {
       if (!mounted) return;
-      if (error) { setAuthError(error.message); setStatus('error'); return; }
-      applySession(session);
-    });
+      console.warn('Auth session bootstrap timed out.');
+      setAuthError('Authentication timed out. Please refresh.');
+      setStatus('ready');
+    }, timeoutMs);
 
-    // React to Google OAuth callback, token refresh, manual sign-out, etc.
+    supabase.auth.getSession()
+      .then(({ data: { session }, error }) => {
+        window.clearTimeout(timeoutId);
+        if (!mounted) return;
+        if (error) { setAuthError(error.message); setStatus('error'); return; }
+        applySession(session);
+      })
+      .catch((err) => {
+        window.clearTimeout(timeoutId);
+        if (!mounted) return;
+        console.error('Auth bootstrap error:', err);
+        setAuthError(err?.message || 'Failed to initialise authentication.');
+        setStatus('error');
+      });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!mounted) return;
 
@@ -270,21 +288,24 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.error('Supabase signOut error:', err);
     } finally {
-      // Belt-and-braces: clear any lingering auth storage keys
+      // [F1] PKCE FIX: never wipe code-verifier or pkce keys — those are needed
+      // during the OAuth redirect flow. Only clear post-session residue.
       try {
         Object.keys(localStorage).forEach(k => {
-          if (k.startsWith('sb:auth') || k.startsWith('supabase.auth')) {
+          const isAuthKey = k.startsWith('sb:auth') || k.startsWith('supabase.auth');
+          const isPkceKey = k.includes('code-verifier') || k.includes('pkce');
+          if (isAuthKey && !isPkceKey) {
             localStorage.removeItem(k);
           }
         });
-      } catch { /* ignore storage access errors */ }
+      } catch { /* ignore storage access errors in sandboxed contexts */ }
+
       setUser(null); setProfile(null); setApprovalState(null);
-      // Hard navigate so every React state tree is fully reset
       window.location.assign('/login');
     }
   }, []);
 
-  // ── refreshProfile (called by Admin after approving / changing role) ───────
+  // ── refreshProfile ────────────────────────────────────────────────────────
   const refreshProfile = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
@@ -293,34 +314,30 @@ export function AuthProvider({ children }) {
     if (p) setProfile(p);
   }, [syncProfile]);
 
-  // ── Derived display values ────────────────────────────────────────────────
+  // ── Derived values ────────────────────────────────────────────────────────
   const displayName = resolveDisplayName(user, profile);
   const roleLabel   = profile?.role ? (ROLE_LABELS[profile.role] ?? profile.role) : '…';
   const isDeveloper = profile?.role === 'developer'
                    || normalizeEmail(resolveEmail(user)) === DEV_EMAIL;
   const isAdmin     = profile?.role === 'admin';
-  // isAuthed is the one boolean pages should use to know whether to render
-  const isAuthed    = status === 'ready'
-                   && !!user
-                   && !!profile
-                   && profile.status === 'verified';
+
+  // [F5] isAuthed requires profile.status === 'verified' — role alone is not enough
+  const isAuthed = status === 'ready'
+                && !!user
+                && !!profile
+                && profile.status === 'verified';
 
   const value = {
-    // Raw auth data
     user,
     profile,
-    // Status flags
-    status,        // 'loading' | 'ready' | 'error'
-    approvalState, // null | 'pending' | 'blocked'
+    status,
+    approvalState,
     isAuthed,
     authError,
-    // Display values (read from DB, not just Google metadata)
     displayName,
     roleLabel,
-    // Permission flags
     isDeveloper,
     isAdmin,
-    // Actions
     logout,
     refreshProfile,
   };

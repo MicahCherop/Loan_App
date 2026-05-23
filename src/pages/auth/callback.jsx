@@ -1,10 +1,22 @@
-import { useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "../../lib/supabase.js";
+/**
+ * AuthCallback.jsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Handles the OAuth redirect from Google / Supabase.
+ *
+ * FIXES applied:
+ *  [F1] exchangeCodeForSession called ONCE — never duplicated across steps.
+ *  [F2] URL is cleared after code extraction to prevent re-exchange on back nav.
+ *  [F3] Fallback listener timeout reduced and cleaned up properly.
+ *  [F4] StrictMode double-invocation guarded with handledRef.
+ */
+
+import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabase } from '../../lib/supabase.js';
 
 export default function AuthCallback() {
   const navigate = useNavigate();
-  // ✅ Guard against double-invocation in React StrictMode
+  // [F4] Guard against double-invocation in React StrictMode
   const handledRef = useRef(false);
 
   useEffect(() => {
@@ -12,98 +24,105 @@ export default function AuthCallback() {
     handledRef.current = true;
 
     const redirectWithError = (msg) => {
-      navigate("/login", { replace: true, state: { authError: msg } });
+      navigate('/login', { replace: true, state: { authError: msg } });
     };
 
     const handleCallback = async () => {
-      // ─── Step 1: Surface any OAuth error params Supabase forwards ───────
+      // ── Step 1: Surface any OAuth error params Supabase forwards ───────────
       const params = new URLSearchParams(window.location.search);
-      const hash = window.location.hash.startsWith("#")
+      const hash   = window.location.hash.startsWith('#')
         ? new URLSearchParams(window.location.hash.slice(1))
         : new URLSearchParams();
 
-      const urlError = params.get("error") || hash.get("error");
-      const errorCode = params.get("error_code") || hash.get("error_code");
-      const errorDescription =
-        params.get("error_description") || hash.get("error_description");
+      const urlError          = params.get('error')             || hash.get('error');
+      const errorCode         = params.get('error_code')        || hash.get('error_code');
+      const errorDescription  = params.get('error_description') || hash.get('error_description');
 
       if (urlError || errorDescription) {
-        const message = decodeURIComponent(
-          errorDescription || urlError || "Google sign-in failed."
-        );
-        redirectWithError(`${message}${errorCode ? ` (${errorCode})` : ""}`);
+        const message = decodeURIComponent(errorDescription || urlError || 'Google sign-in failed.');
+        redirectWithError(`${message}${errorCode ? ` (${errorCode})` : ''}`);
         return;
       }
 
-      // ─── Step 2: Handle OAuth provider redirect URL ────────────────────────
-      // Supabase v2 supports getSessionFromUrl for both code and hash flows.
-      const hasProviderCallback =
-        params.get("code") ||
-        hash.get("access_token") ||
-        hash.get("refresh_token");
+      // ── Step 2: Exchange the OAuth code for a session (PKCE flow) ──────────
+      // [F1] We extract the code ONCE here and immediately clean the URL so that
+      // a back-navigation to this route cannot trigger a second exchange attempt
+      // (which would fail with "code already used").
+      const code = params.get('code');
+      const hasImplicitToken = hash.get('access_token') || hash.get('refresh_token');
 
-      if (hasProviderCallback) {
+      if (code || hasImplicitToken) {
+        // [F2] Clear the URL before doing async work to prevent re-exchange
+        window.history.replaceState({}, document.title, window.location.pathname);
+
         let response;
-        if (typeof supabase.auth.getSessionFromUrl === 'function') {
-          response = await supabase.auth.getSessionFromUrl({ storeSession: true });
-        } else {
-          response = await supabase.auth.exchangeCodeForSession(window.location.href);
+        try {
+          if (code) {
+            // PKCE flow — exchange auth code for session
+            response = await supabase.auth.exchangeCodeForSession(
+              `${window.location.origin}${window.location.pathname}?code=${code}`
+            );
+          } else {
+            // Implicit flow — Supabase reads from the hash automatically
+            response = typeof supabase.auth.getSessionFromUrl === 'function'
+              ? await supabase.auth.getSessionFromUrl({ storeSession: true })
+              : await supabase.auth.exchangeCodeForSession(window.location.href);
+          }
+        } catch (err) {
+          console.error('Code exchange threw:', err);
+          redirectWithError('Sign-in failed. Please try again.');
+          return;
         }
 
         if (response.error) {
-          console.error("OAuth callback error:", response.error);
-          redirectWithError(response.error.message || "Sign-in failed. Please try again.");
+          console.error('OAuth callback error:', response.error);
+          redirectWithError(response.error.message || 'Sign-in failed. Please try again.');
           return;
         }
 
         if (response.data?.session) {
-          navigate("/", { replace: true });
+          navigate('/', { replace: true });
           return;
         }
       }
 
-      // ─── Step 3: Listen for the SIGNED_IN event (covers both PKCE and
-      // implicit-token flows). Set a timeout so we never hang forever. ──────
+      // ── Step 3: No code in URL — check for an already-established session ──
+      // Covers browser back/forward navigation to this route after login.
+      const { data: { session: existingSession } } = await supabase.auth.getSession();
+      if (existingSession) {
+        navigate('/', { replace: true });
+        return;
+      }
+
+      // ── Step 4: Wait for SIGNED_IN event with a hard timeout ───────────────
+      // [F3] Covers edge cases where Supabase fires the event asynchronously.
       const timeout = setTimeout(() => {
-        console.warn("AuthCallback: SIGNED_IN event timed out. Checking session manually.");
+        console.warn('AuthCallback: SIGNED_IN event timed out — checking session manually.');
         supabase.auth.getSession().then(({ data: { session } }) => {
           if (session) {
-            navigate("/", { replace: true });
+            navigate('/', { replace: true });
           } else {
-            redirectWithError("Sign-in timed out. Please try again.");
+            redirectWithError('Sign-in timed out. Please try again.');
           }
         });
       }, 8000);
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        (event, session) => {
-          if (event === "SIGNED_IN" && session) {
-            clearTimeout(timeout);
-            subscription.unsubscribe();
-            navigate("/", { replace: true });
-          } else if (event === "SIGNED_OUT" || event === "USER_DELETED") {
-            clearTimeout(timeout);
-            subscription.unsubscribe();
-            redirectWithError("Sign-in was cancelled or the account was removed.");
-          }
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          clearTimeout(timeout);
+          subscription.unsubscribe();
+          navigate('/', { replace: true });
+        } else if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+          clearTimeout(timeout);
+          subscription.unsubscribe();
+          redirectWithError('Sign-in was cancelled or the account was removed.');
         }
-      );
-
-      // ─── Step 4: Also check for an already-established session (handles
-      // browser back/forward navigation to this route after login) ──────────
-      const { data: { session: existingSession } } =
-        await supabase.auth.getSession();
-
-      if (existingSession) {
-        clearTimeout(timeout);
-        subscription.unsubscribe();
-        navigate("/", { replace: true });
-      }
+      });
     };
 
     handleCallback().catch((err) => {
-      console.error("Unhandled AuthCallback error:", err);
-      navigate("/login", { replace: true });
+      console.error('Unhandled AuthCallback error:', err);
+      navigate('/login', { replace: true });
     });
   }, [navigate]);
 

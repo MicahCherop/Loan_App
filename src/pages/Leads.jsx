@@ -1,3 +1,18 @@
+/**
+ * Leads.jsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Leads management page.
+ *
+ * FIXES applied:
+ *  [F1] handleAddLead verifies auth session before insert — surfaces a clear
+ *       error instead of a silent RLS 403 when the session has expired.
+ *  [F2] fetchLeads uses a stable useCallback ref so it never causes infinite loops.
+ *  [F3] Toast replaces all alert() calls.
+ *  [F4] Separate `submitting` state so the table stays interactive during modal save.
+ *  [F5] Outside-click handler on the action menu dropdown.
+ *  [F6] Inline phone validation — no alert().
+ */
+
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase.js';
 import {
@@ -14,7 +29,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-// ─── Inline toast notification ───────────────────────────────────────────────
+// ─── Inline toast notification ────────────────────────────────────────────────
 function Toast({ toast }) {
   if (!toast) return null;
   const isError = toast.type === 'error';
@@ -34,13 +49,13 @@ function Toast({ toast }) {
   );
 }
 
-// ─── Phone normaliser ────────────────────────────────────────────────────────
+// ─── Phone normaliser ─────────────────────────────────────────────────────────
 // Accepts: +2547XXXXXXXX | 07XXXXXXXX | 2547XXXXXXXX
 // Returns: { ok: true, value: '2547XXXXXXXX' } | { ok: false, error: string }
 function normalisePhone(raw) {
   let digits = raw.replace(/\D/g, '');
   if (digits.startsWith('254')) {
-    // already in international format
+    // already international
   } else if (digits.startsWith('0')) {
     digits = `254${digits.slice(1)}`;
   } else if (digits.startsWith('7') || digits.startsWith('1')) {
@@ -53,7 +68,7 @@ function normalisePhone(raw) {
   return { ok: true, value: digits };
 }
 
-// ─── Status badge ─────────────────────────────────────────────────────────────
+// ─── Status badge ──────────────────────────────────────────────────────────────
 const STATUS_STYLES = {
   new:        'bg-blue-50 text-blue-700 border-blue-100',
   contacted:  'bg-violet-50 text-violet-700 border-violet-100',
@@ -72,33 +87,35 @@ function StatusBadge({ status }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function Leads() {
-  const [leads, setLeads] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false); // ✅ FIX 1: separate modal submit state
+  const [leads,        setLeads]        = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [submitting,   setSubmitting]   = useState(false); // [F4] modal-only spinner
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newLead, setNewLead] = useState({ name: '', phone: '' });
-  const [phoneError, setPhoneError] = useState('');   // ✅ FIX 2: inline phone validation
-  const [searchTerm, setSearchTerm] = useState('');
+  const [newLead,      setNewLead]      = useState({ name: '', phone: '' });
+  const [phoneError,   setPhoneError]   = useState('');   // [F6] inline validation
+  const [searchTerm,   setSearchTerm]   = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [toast, setToast] = useState(null);           // ✅ FIX 3: replaces all alert() calls
+  const [toast,        setToast]        = useState(null); // [F3] replaces alert()
   const [activeMenuId, setActiveMenuId] = useState(null);
 
   const statusFilterRef = useRef(null);
-  const menuRef = useRef(null);                        // ✅ FIX 4: for outside-click detection
-  const toastTimerRef = useRef(null);
-  const navigate = useNavigate();
+  const menuRef         = useRef(null);  // [F5] outside-click detection
+  const toastTimerRef   = useRef(null);
+  const navigate        = useNavigate();
 
-  // ── Toast helper ────────────────────────────────────────────────────────────
+  // ── Toast helper ─────────────────────────────────────────────────────────
   const showToast = useCallback((message, type = 'success') => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ message, type });
     toastTimerRef.current = setTimeout(() => setToast(null), 5000);
   }, []);
 
-  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
 
-  // ── Fetch leads ──────────────────────────────────────────────────────────────
-  // ✅ FIX 5: useCallback so the reference is stable and useEffect dep is correct
+  // ── Fetch leads ──────────────────────────────────────────────────────────
+  // [F2] Stable useCallback ref — safe as a useEffect dependency
   const fetchLeads = useCallback(async () => {
     setLoading(true);
     try {
@@ -126,8 +143,8 @@ export default function Leads() {
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
-  // ── Close dropdown on outside click ─────────────────────────────────────────
-  // ✅ FIX 6: attaches a document listener and clears activeMenuId on outside click
+  // ── Close dropdown on outside click ──────────────────────────────────────
+  // [F5] Attaches a document listener only while a menu is open
   useEffect(() => {
     if (!activeMenuId) return;
     const handleOutsideClick = (e) => {
@@ -139,41 +156,47 @@ export default function Leads() {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [activeMenuId]);
 
-  // ── Add lead ─────────────────────────────────────────────────────────────────
+  // ── Add lead ──────────────────────────────────────────────────────────────
   const handleAddLead = async (e) => {
     e.preventDefault();
     setPhoneError('');
 
-    // Inline phone validation — no alert()
+    // [F6] Inline phone validation — no alert()
     const phoneResult = normalisePhone(newLead.phone);
     if (!phoneResult.ok) {
       setPhoneError(phoneResult.error);
       return;
     }
 
-    setSubmitting(true); // ✅ only the modal button spins; table stays interactive
+    setSubmitting(true);
 
     try {
+      // [F1] Verify the session is still alive before attempting the insert.
+      // An expired or missing session would cause a silent RLS 403 without this check.
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      const user = session?.user;
 
-      if (sessionError || !user) {
-        showToast(sessionError?.message || 'You must be logged in to add a lead.', 'error');
+      if (sessionError || !session?.user) {
+        showToast(
+          sessionError?.message || 'Your session has expired. Please sign in again.',
+          'error'
+        );
+        setSubmitting(false);
         return;
       }
 
       const { error } = await supabase.from('leads').insert([{
-        name: newLead.name.trim(),
-        phone: phoneResult.value,
-        officer_id: user.id,
-        status: 'new',
-        email: '',
+        name:       newLead.name.trim(),
+        phone:      phoneResult.value,
+        officer_id: session.user.id,
+        status:     'new',
+        email:      '',
       }]);
 
       if (error) {
         const msg =
-          error.code === 'PGRST001' ? 'Access denied: not authorized to add leads.' :
-          error.code === 'PGRST116' ? 'Your profile was not created properly. Please log out and back in.' :
+          error.code === 'PGRST001'  ? 'Access denied: not authorized to add leads.' :
+          error.code === 'PGRST116'  ? 'Your profile was not created properly. Please log out and back in.' :
+          error.code === '42501'     ? 'Permission denied. Check your account role with an administrator.' :
           `Error creating lead: ${error.message}`;
         showToast(msg, 'error');
         console.error('Add lead error:', error);
@@ -226,7 +249,6 @@ export default function Leads() {
           />
         </div>
         <div className="flex items-center gap-3">
-          {/* ✅ FIX 7: Added missing status options that the DB may contain */}
           <select
             ref={statusFilterRef}
             value={statusFilter}
@@ -324,7 +346,7 @@ export default function Leads() {
                             <ArrowRight size={14} className="hidden sm:inline" />
                           </button>
                         )}
-                        {/* ✅ FIX 8: ref attached to the dropdown wrapper for outside-click */}
+                        {/* [F5] ref on the active dropdown wrapper only */}
                         <div className="relative" ref={activeMenuId === lead.id ? menuRef : null}>
                           <button
                             type="button"
@@ -372,7 +394,7 @@ export default function Leads() {
         </div>
       </div>
 
-      {/* ── Add Lead Modal ──────────────────────────────────────────────────── */}
+      {/* ── Add Lead Modal ────────────────────────────────────────────────── */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-slate-100">
@@ -407,7 +429,6 @@ export default function Leads() {
                   value={newLead.phone}
                   onChange={(e) => {
                     setPhoneError('');
-                    // Strip non-digits as user types
                     setNewLead({ ...newLead, phone: e.target.value.replace(/\D/g, '') });
                   }}
                   className={`w-full px-4 py-2 border rounded-lg focus:outline-none transition-all text-sm ${
@@ -415,7 +436,6 @@ export default function Leads() {
                   }`}
                   placeholder="0712 345 678 or 254712345678"
                 />
-                {/* ✅ FIX 9: inline phone error, no alert() */}
                 {phoneError && (
                   <p className="text-xs text-rose-600 mt-1.5 flex items-center gap-1">
                     <AlertCircle size={12} />
