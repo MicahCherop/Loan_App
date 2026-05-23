@@ -92,20 +92,24 @@ export default function Login() {
         return;
       }
 
-      // 2. PKCE callback: Supabase appends ?code= or #access_token= after OAuth redirect.
-      //    We must exchange the code before the session is available.
-      const hasPKCECode    = window.location.search.includes('code=');
+      // 2. OAuth callback: Supabase appends ?code= or #access_token= after redirect.
+      //    We must resolve the callback and store the session before routing.
+      const hasPKCECode     = window.location.search.includes('code=');
       const hasImplicitToken = window.location.hash.includes('access_token');
       if (hasPKCECode || hasImplicitToken) {
         setLoading(true);
-        const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(
-          window.location.href
-        );
+        let response;
+        if (typeof supabase.auth.getSessionFromUrl === 'function') {
+          response = await supabase.auth.getSessionFromUrl({ storeSession: true });
+        } else {
+          response = await supabase.auth.exchangeCodeForSession(window.location.href);
+        }
+
         if (!mounted) return;
-        if (exchangeError) {
-          setError(exchangeError.message || 'Sign-in failed. Please try again.');
+        if (response.error) {
+          setError(response.error.message || 'Sign-in failed. Please try again.');
           setLoading(false);
-        } else if (data?.session) {
+        } else if (response.data?.session) {
           navigate('/', { replace: true });
         }
         return;

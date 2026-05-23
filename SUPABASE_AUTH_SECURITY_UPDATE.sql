@@ -10,6 +10,14 @@ ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.loan_requests ENABLE ROW LEVEL SECURITY;
 
+CREATE TABLE IF NOT EXISTS public.pre_authorized_emails (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email TEXT UNIQUE NOT NULL,
+  role TEXT NOT NULL,
+  created_by UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 CREATE OR REPLACE FUNCTION public.normalized_email(input_email TEXT)
 RETURNS TEXT AS $$
   SELECT CASE
@@ -101,6 +109,11 @@ CREATE POLICY "Users can update their own profile" ON public.profiles
     AND role = public.authorized_role_for(email)
   );
 
+DROP POLICY IF EXISTS "Users can insert their own push payment requests" ON public.push_payment_requests;
+DROP POLICY IF EXISTS "Users can update their own push payment requests" ON public.push_payment_requests;
+DROP POLICY IF EXISTS "Users can view their own push payment requests" ON public.push_payment_requests;
+DROP POLICY IF EXISTS "Admins can manage push payment requests" ON public.push_payment_requests;
+
 CREATE TABLE IF NOT EXISTS public.push_payment_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -118,17 +131,17 @@ CREATE TABLE IF NOT EXISTS public.push_payment_requests (
 
 ALTER TABLE public.push_payment_requests ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS "Users can insert their own push payment requests" ON public.push_payment_requests
+CREATE POLICY "Users can insert their own push payment requests" ON public.push_payment_requests
   FOR INSERT WITH CHECK (auth.uid() = initiated_by);
 
-CREATE POLICY IF NOT EXISTS "Users can update their own push payment requests" ON public.push_payment_requests
+CREATE POLICY "Users can update their own push payment requests" ON public.push_payment_requests
   FOR UPDATE USING (auth.uid() = initiated_by)
   WITH CHECK (auth.uid() = initiated_by);
 
-CREATE POLICY IF NOT EXISTS "Users can view their own push payment requests" ON public.push_payment_requests
+CREATE POLICY "Users can view their own push payment requests" ON public.push_payment_requests
   FOR SELECT USING (auth.uid() = initiated_by);
 
-CREATE POLICY IF NOT EXISTS "Admins can manage push payment requests" ON public.push_payment_requests
+CREATE POLICY "Admins can manage push payment requests" ON public.push_payment_requests
   FOR ALL USING (public.is_platform_admin())
   WITH CHECK (public.is_platform_admin());
 

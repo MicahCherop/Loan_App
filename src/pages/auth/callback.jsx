@@ -35,23 +35,31 @@ export default function AuthCallback() {
         return;
       }
 
-      // ─── Step 2: Explicit PKCE code exchange (for supabase-js v2 PKCE flow) ─
-      // When auth.flowType = 'pkce', Supabase appends ?code= to the redirect URL.
-      // detectSessionInUrl handles it automatically BUT only fires via the auth
-      // listener — not synchronously. We call exchangeCodeForSession explicitly so
-      // we can handle errors ourselves instead of silently losing the session.
-      const code = params.get("code");
-      if (code) {
-        const { error: exchangeError } =
-          await supabase.auth.exchangeCodeForSession(window.location.href);
+      // ─── Step 2: Handle OAuth provider redirect URL ────────────────────────
+      // Supabase v2 supports getSessionFromUrl for both code and hash flows.
+      const hasProviderCallback =
+        params.get("code") ||
+        hash.get("access_token") ||
+        hash.get("refresh_token");
 
-        if (exchangeError) {
-          console.error("PKCE exchange error:", exchangeError);
-          redirectWithError(exchangeError.message || "Sign-in failed. Please try again.");
+      if (hasProviderCallback) {
+        let response;
+        if (typeof supabase.auth.getSessionFromUrl === 'function') {
+          response = await supabase.auth.getSessionFromUrl({ storeSession: true });
+        } else {
+          response = await supabase.auth.exchangeCodeForSession(window.location.href);
+        }
+
+        if (response.error) {
+          console.error("OAuth callback error:", response.error);
+          redirectWithError(response.error.message || "Sign-in failed. Please try again.");
           return;
         }
-        // After a successful exchange the auth listener below fires SIGNED_IN,
-        // which will navigate to "/". Fall through and let it handle routing.
+
+        if (response.data?.session) {
+          navigate("/", { replace: true });
+          return;
+        }
       }
 
       // ─── Step 3: Listen for the SIGNED_IN event (covers both PKCE and
