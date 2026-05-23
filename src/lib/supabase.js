@@ -1,20 +1,40 @@
+/**
+ * lib/supabase.js
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Supabase client singleton.
+ *
+ * CRITICAL FIX — PKCE code verifier lost on OAuth redirect:
+ *   Supabase JS v2.x defaults to sessionStorage for the PKCE code verifier in
+ *   some environments. sessionStorage is cleared when the browser navigates away
+ *   to Google and back, so by the time AuthCallback tries to exchange the code
+ *   the verifier is gone → 400 "both auth code and code verifier should be
+ *   non-empty".
+ *
+ *   Forcing `storage: window.localStorage` keeps the verifier alive across the
+ *   full redirect round-trip.
+ */
+
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-if (!supabaseUrl) {
-  throw new Error('Missing VITE_SUPABASE_URL. Add it to .env and restart the Vite dev server.');
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    'Missing Supabase environment variables. ' +
+    'Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file.'
+  );
 }
 
-if (!supabaseAnonKey) {
-  throw new Error('Missing VITE_SUPABASE_ANON_KEY. Add your Supabase anon public key to .env and restart the Vite dev server.');
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
-    persistSession: true,
-    detectSessionInUrl: true,
+    // Keep the PKCE code verifier in localStorage so it survives the
+    // Google OAuth redirect (sessionStorage is wiped on navigation).
+    storage: window.localStorage,
+    storageKey: 'rfg-auth',          // namespaced key — avoids collisions
     autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: true,        // lets Supabase pick up #access_token or ?code=
+    flowType: 'pkce',                // explicit — matches Supabase dashboard setting
   },
 });

@@ -4,7 +4,7 @@ import { useAuth } from './context/AuthContext.jsx';
 
 import DashboardLayout from './components/layout/DashboardLayout.jsx';
 import Login           from './pages/Login.jsx';
-import AuthCallback    from './pages/auth/callback.jsx';
+import AuthCallback    from './pages/auth/AuthCallback.jsx';
 import Dashboard       from './pages/Dashboard.jsx';
 import Leads           from './pages/Leads.jsx';
 import Customers       from './pages/Customers.jsx';
