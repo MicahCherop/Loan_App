@@ -135,7 +135,7 @@ Google OAuth Error: {error: "server_error", code: "unexpected_failure", ...}
 4. Click delete (trash icon)
 5. Click "Create Credentials" → OAuth client ID
 6. Select "Web application"
-7. Add Name: "Wekulo Credit App"
+7. Add Name: "RFG Capital App"
 8. Add Authorized redirect URIs:
    ```
    https://loan-app-two-tau.vercel.app/auth/callback

@@ -372,7 +372,7 @@ function PushPaymentTab({ showToast }) {
           phone:       normalised,
           amount:      amt,
           accountRef:  `REG-${normalised}`,
-          description: 'Registration Fee – Wekulo Credit',
+          description: 'Registration Fee – RFG Capital',
           recordId:    pushRecord?.id,
         },
       });

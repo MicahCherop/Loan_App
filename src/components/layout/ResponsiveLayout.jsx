@@ -15,10 +15,10 @@ export function DesktopSidebar({ navItems, logo, onLogout, userInitial }) {
             logo
           ) : (
             <div className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center text-white font-bold">
-              {userInitial || 'W'}
+              {userInitial || 'R'}
             </div>
           )}
-          <h1 className="text-lg font-bold text-white">Wekulo</h1>
+          <h1 className="text-lg font-bold text-white">RFG</h1>
         </div>
       </div>
 

@@ -1,8 +1,8 @@
-# 🏦 Wekulo Finance - Professional UI/UX Refactor
+# 🏦 RFG Capital - Professional UI/UX Refactor
 
 ## Executive Summary
 
-This refactor transforms the Wekulo Credit loan app into a **production-grade fintech application** with professional design, exceptional mobile responsiveness, and high-trust micro-interactions. Built with **React**, **Tailwind CSS**, and **best-in-class fintech UX patterns**.
+This refactor transforms the RFG Capital loan app into a **production-grade fintech application** with professional design, exceptional mobile responsiveness, and high-trust micro-interactions. Built with **React**, **Tailwind CSS**, and **best-in-class fintech UX patterns**.
 
 ---
 

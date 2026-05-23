@@ -1,8 +1,8 @@
-# Wekulo Finance UI/UX Refactor Guide
+# RFG Capital UI/UX Refactor Guide
 
 ## Professional Fintech Design System
 
-This guide documents the comprehensive UI refactor for Wekulo Credit's loan application. The design system prioritizes **trust**, **clarity**, and **mobile-first responsiveness**.
+This guide documents the comprehensive UI refactor for RFG Capital's loan application. The design system prioritizes **trust**, **clarity**, and **mobile-first responsiveness**.
 
 ---
 

@@ -1,0 +1,240 @@
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { supabase } from '../lib/supabase.js';
+
+// ─── Context ──────────────────────────────────────────────────────────────────
+const AuthContext = createContext(null);
+
+export function useAuth() {
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error('useAuth must be used inside <AuthProvider>');
+  return ctx;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const DEV_EMAIL = 'mic1dev.me@gmail.com';
+
+const ROLE_LABELS = {
+  developer: 'Developer',
+  admin:     'Admin',
+  officer:   'Officer',
+  manager:   'Manager',
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function normalizeEmail(email) {
+  if (!email) return '';
+  const lower = email.toLowerCase();
+  const [local, domain] = lower.split('@');
+  if (!local || !domain) return lower;
+  return `${local.split('+')[0]}@${domain}`;
+}
+
+function resolveEmail(user) {
+  return user?.email || user?.user_metadata?.email || '';
+}
+
+// Priority: DB full_name → Google full_name → Google name → email prefix
+function resolveDisplayName(user, profile) {
+  if (profile?.full_name)             return profile.full_name;
+  if (user?.user_metadata?.full_name) return user.user_metadata.full_name;
+  if (user?.user_metadata?.name)      return user.user_metadata.name;
+  const email = resolveEmail(user) || profile?.email || '';
+  if (!email) return 'User';
+  const prefix = email.split('@')[0];
+  return prefix.charAt(0).toUpperCase() + prefix.slice(1);
+}
+
+// ─── Audit helper ─────────────────────────────────────────────────────────────
+export async function logAudit(supabase, { action, entity, entityId, payload }) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from('audit_log').insert([{
+      actor_id:  session?.user?.id ?? null,
+      action,
+      entity,
+      entity_id: entityId ?? null,
+      payload:   { ...payload, _ts: new Date().toISOString() },
+    }]);
+  } catch (err) {
+    console.warn('Audit log error (non-fatal):', err);
+  }
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────────────
+export function AuthProvider({ children }) {
+  const [user,          setUser]          = useState(null);
+  const [profile,       setProfile]       = useState(null);
+  const [status,        setStatus]        = useState('loading');
+  const [approvalState, setApprovalState] = useState(null);
+  const [authError,     setAuthError]     = useState(null);
+
+  const syncingRef = useRef(false);
+
+  const syncProfile = useCallback(async (authUser) => {
+    if (!authUser) return null;
+    if (syncingRef.current) return null;
+    syncingRef.current = true;
+
+    try {
+      const email    = normalizeEmail(resolveEmail(authUser));
+      const isDev    = email === DEV_EMAIL;
+      const authName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || null;
+
+      const { data: existing, error: fetchErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', authUser.id)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      if (existing) {
+        const patches = {};
+        if (existing.email !== email)               patches.email     = email;
+        if (authName && !existing.full_name)        patches.full_name = authName;
+        if (isDev && existing.role !== 'developer') patches.role      = 'developer';
+        if (isDev && existing.status !== 'verified') patches.status   = 'verified';
+
+        if (Object.keys(patches).length > 0) {
+          const { data: patched, error: patchErr } = await supabase
+            .from('profiles')
+            .update(patches)
+            .eq('id', authUser.id)
+            .select()
+            .single();
+
+          if (patchErr) {
+            console.warn('Profile patch warning:', patchErr);
+            return { ...existing, ...patches };
+          }
+          return patched;
+        }
+        return existing;
+      }
+
+      const newRole   = isDev ? 'developer' : 'officer';
+      const newStatus = isDev ? 'verified'  : 'pending';
+
+      const { data: created, error: insertErr } = await supabase
+        .from('profiles')
+        .insert([{
+          id:        authUser.id,
+          email,
+          role:      newRole,
+          status:    newStatus,
+          ...(authName ? { full_name: authName } : {}),
+        }])
+        .select()
+        .single();
+
+      if (insertErr) {
+        console.warn('Profile insert error (retrying read):', insertErr);
+        const { data: retried } = await supabase
+          .from('profiles').select('*').eq('id', authUser.id).maybeSingle();
+        return retried ?? null;
+      }
+
+      return created;
+    } catch (err) {
+      console.error('syncProfile error:', err);
+      throw err;
+    } finally {
+      syncingRef.current = false;
+    }
+  }, []);
+
+  const applySession = useCallback(async (session) => {
+    if (!session) {
+      setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
+      return;
+    }
+    try {
+      const profileData = await syncProfile(session.user);
+
+      if (!profileData) {
+        setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
+        return;
+      }
+
+      if (profileData.status === 'pending') {
+        await supabase.auth.signOut();
+        setApprovalState('pending');
+        setUser(null); setProfile(null); setStatus('ready');
+        return;
+      }
+      if (profileData.status === 'blocked') {
+        await supabase.auth.signOut();
+        setApprovalState('blocked');
+        setUser(null); setProfile(null); setStatus('ready');
+        return;
+      }
+
+      setUser(session.user);
+      setProfile(profileData);
+      setApprovalState(null);
+      setStatus('ready');
+    } catch (err) {
+      console.error('applySession error:', err);
+      setAuthError(err.message || 'Failed to load profile.');
+      setUser(null); setProfile(null); setStatus('error');
+    }
+  }, [syncProfile]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (!mounted) return;
+      if (error) { setAuthError(error.message); setStatus('error'); return; }
+      applySession(session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
+        setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
+        return;
+      }
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        await applySession(session);
+      }
+    });
+
+    return () => { mounted = false; subscription.unsubscribe(); };
+  }, [applySession]);
+
+  const logout = useCallback(async () => {
+    try { await supabase.auth.signOut(); } catch (err) { console.error('Logout error:', err); }
+    finally {
+      try {
+        Object.keys(localStorage).forEach(k => {
+          if (k.startsWith('sb:auth') || k.startsWith('supabase.auth')) localStorage.removeItem(k);
+        });
+      } catch {}
+      setUser(null); setProfile(null); setApprovalState(null);
+      window.location.assign('/login');
+    }
+  }, []);
+
+  const displayName = resolveDisplayName(user, profile);
+  const roleLabel   = profile?.role ? (ROLE_LABELS[profile.role] ?? profile.role) : '…';
+  const isDeveloper = profile?.role === 'developer' || normalizeEmail(resolveEmail(user)) === DEV_EMAIL;
+  const isAdmin     = profile?.role === 'admin';
+  const isAuthed    = status === 'ready' && !!user && !!profile && profile.status === 'verified';
+
+  const refreshProfile = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+    syncingRef.current = false;
+    const p = await syncProfile(session.user);
+    if (p) setProfile(p);
+  }, [syncProfile]);
+
+  const value = {
+    user, profile, status, approvalState, isAuthed, authError,
+    displayName, roleLabel, isDeveloper, isAdmin,
+    logout, refreshProfile,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}

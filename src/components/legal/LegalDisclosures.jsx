@@ -205,7 +205,7 @@ export function LegalModal({
 
             <p className="text-sm text-slate-600">
               To make an early payment, contact our customer service team at{' '}
-              <strong>support@wekulo.com</strong> or call{' '}
+                <strong>support@rfgcapital.com</strong> or call{' '}
               <strong>+254 700 123 456</strong>.
             </p>
           </DisclosureSection>
@@ -254,7 +254,7 @@ export function LegalModal({
 
               <p className="text-xs text-slate-500">
                 Full privacy policy available at:{' '}
-                <strong>wekulo.com/privacy</strong>
+                <strong>rfgcapital.com/privacy</strong>
               </p>
             </div>
           </DisclosureSection>
@@ -273,7 +273,7 @@ export function LegalModal({
                 <div className="space-y-2 text-slate-600">
                   <div>
                     <p className="text-xs text-slate-500">Company Name</p>
-                    <p className="font-medium">Wekulo Credit Limited</p>
+                    <p className="font-medium">RFG Capital Limited</p>
                   </div>
                   <div>
                     <p className="text-xs text-slate-500">Registration Number</p>
@@ -433,7 +433,7 @@ export function LegalFooter({ onOpenModal }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-8">
           {/* Company Info */}
           <div>
-            <h3 className="font-bold text-white mb-4">Wekulo Credit</h3>
+            <h3 className="font-bold text-white mb-4">RFG Capital</h3>
             <p className="text-sm text-slate-400 mb-4">
               Safe, reliable lending for Kenya's financial future.
             </p>
@@ -536,10 +536,10 @@ export function LegalFooter({ onOpenModal }) {
               </li>
               <li>
                 <a
-                  href="mailto:support@wekulo.com"
+                  href="mailto:support@rfgcapital.com"
                   className="text-slate-300 hover:text-emerald-400 transition-colors"
                 >
-                  support@wekulo.com
+                  support@rfgcapital.com
                 </a>
               </li>
               <li>
@@ -558,7 +558,7 @@ export function LegalFooter({ onOpenModal }) {
         <div className="border-t border-slate-800 py-6 flex flex-col sm:flex-row items-center justify-between">
           {/* Copyright */}
           <p className="text-xs text-slate-500">
-            © {currentYear} Wekulo Credit Limited. All rights reserved.
+            © {currentYear} RFG Capital Limited. All rights reserved.
           </p>
 
           {/* Security Badges */}
@@ -579,7 +579,7 @@ export function LegalFooter({ onOpenModal }) {
         <div className="mt-6 p-4 bg-slate-800/50 border border-slate-700 rounded-lg text-xs text-slate-400">
           <p>
             <strong className="text-slate-200">Regulatory Disclosure:</strong>{' '}
-            Wekulo Credit Limited is licensed and regulated by the Central Bank
+            RFG Capital Limited is licensed and regulated by the Central Bank
             of Kenya. All lending products comply with the Central Bank Lending
             Code and national financial regulations. This website does not
             constitute an offer to lend and is for informational purposes only.

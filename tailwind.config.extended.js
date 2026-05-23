@@ -1,5 +1,5 @@
 /**
- * Tailwind Configuration for Wekulo Finance
+ * Tailwind Configuration for RFG Capital
  * 
  * This configuration establishes the professional fintech design system
  * with consistent colors, spacing, typography, and animations
