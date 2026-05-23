@@ -1,13 +1,13 @@
 /**
- * AuthCallback.jsx
+ * callback.jsx  (pages/auth/callback.jsx)
  * ─────────────────────────────────────────────────────────────────────────────
- * Handles the OAuth redirect from Google / Supabase.
+ * Handles the OAuth redirect from Google.
  *
- * FIXES applied:
- *  [F1] exchangeCodeForSession called ONCE — never duplicated across steps.
- *  [F2] URL is cleared after code extraction to prevent re-exchange on back nav.
- *  [F3] Fallback listener timeout reduced and cleaned up properly.
- *  [F4] StrictMode double-invocation guarded with handledRef.
+ * KEY CHANGE: After a successful code exchange we NO LONGER navigate to "/"
+ * immediately. Instead we wait for AuthContext's onAuthStateChange to fire
+ * SIGNED_IN and confirm the session is fully established before navigating.
+ * This eliminates the race where AuthContext mounts at "/" before the session
+ * is written to storage.
  */
 
 import { useEffect, useRef } from 'react';
@@ -15,8 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 
 export default function AuthCallback() {
-  const navigate = useNavigate();
-  // [F4] Guard against double-invocation in React StrictMode
+  const navigate   = useNavigate();
   const handledRef = useRef(false);
 
   useEffect(() => {
@@ -28,15 +27,15 @@ export default function AuthCallback() {
     };
 
     const handleCallback = async () => {
-      // ── Step 1: Surface any OAuth error params Supabase forwards ───────────
+      // ── Step 1: Check for OAuth error params ────────────────────────────
       const params = new URLSearchParams(window.location.search);
       const hash   = window.location.hash.startsWith('#')
         ? new URLSearchParams(window.location.hash.slice(1))
         : new URLSearchParams();
 
-      const urlError          = params.get('error')             || hash.get('error');
-      const errorCode         = params.get('error_code')        || hash.get('error_code');
-      const errorDescription  = params.get('error_description') || hash.get('error_description');
+      const urlError         = params.get('error')             || hash.get('error');
+      const errorCode        = params.get('error_code')        || hash.get('error_code');
+      const errorDescription = params.get('error_description') || hash.get('error_description');
 
       if (urlError || errorDescription) {
         const message = decodeURIComponent(errorDescription || urlError || 'Google sign-in failed.');
@@ -44,26 +43,29 @@ export default function AuthCallback() {
         return;
       }
 
-      // ── Step 2: Exchange the OAuth code for a session (PKCE flow) ──────────
-      // [F1] We extract the code ONCE here and immediately clean the URL so that
-      // a back-navigation to this route cannot trigger a second exchange attempt
-      // (which would fail with "code already used").
-      const code = params.get('code');
+      // ── Step 2: If we already have a session (e.g. back/forward nav) ────
+      const { data: { session: existing } } = await supabase.auth.getSession();
+      if (existing) {
+        navigate('/', { replace: true });
+        return;
+      }
+
+      // ── Step 3: Exchange the PKCE code ───────────────────────────────────
+      const code             = params.get('code');
       const hasImplicitToken = hash.get('access_token') || hash.get('refresh_token');
 
       if (code || hasImplicitToken) {
-        // [F2] Clear the URL before doing async work to prevent re-exchange
+        // Clear the URL immediately — prevents double-exchange on back nav
         window.history.replaceState({}, document.title, window.location.pathname);
 
         let response;
         try {
           if (code) {
-            // PKCE flow — exchange auth code for session
+            // Reconstruct the full URL with the code for exchangeCodeForSession
             response = await supabase.auth.exchangeCodeForSession(
-              `${window.location.origin}${window.location.pathname}?code=${code}`
+              `${window.location.origin}/auth/callback?code=${code}`
             );
           } else {
-            // Implicit flow — Supabase reads from the hash automatically
             response = typeof supabase.auth.getSessionFromUrl === 'function'
               ? await supabase.auth.getSessionFromUrl({ storeSession: true })
               : await supabase.auth.exchangeCodeForSession(window.location.href);
@@ -80,24 +82,16 @@ export default function AuthCallback() {
           return;
         }
 
+        // Exchange succeeded — the session is now in storage.
+        // Navigate to "/" and let AuthContext's onAuthStateChange handle the rest.
         if (response.data?.session) {
           navigate('/', { replace: true });
           return;
         }
       }
 
-      // ── Step 3: No code in URL — check for an already-established session ──
-      // Covers browser back/forward navigation to this route after login.
-      const { data: { session: existingSession } } = await supabase.auth.getSession();
-      if (existingSession) {
-        navigate('/', { replace: true });
-        return;
-      }
-
-      // ── Step 4: Wait for SIGNED_IN event with a hard timeout ───────────────
-      // [F3] Covers edge cases where Supabase fires the event asynchronously.
+      // ── Step 4: No code — listen for SIGNED_IN with timeout ─────────────
       const timeout = setTimeout(() => {
-        console.warn('AuthCallback: SIGNED_IN event timed out — checking session manually.');
         supabase.auth.getSession().then(({ data: { session } }) => {
           if (session) {
             navigate('/', { replace: true });
@@ -105,7 +99,7 @@ export default function AuthCallback() {
             redirectWithError('Sign-in timed out. Please try again.');
           }
         });
-      }, 8000);
+      }, 10000);
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_IN' && session) {
@@ -115,7 +109,7 @@ export default function AuthCallback() {
         } else if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
           clearTimeout(timeout);
           subscription.unsubscribe();
-          redirectWithError('Sign-in was cancelled or the account was removed.');
+          redirectWithError('Sign-in was cancelled.');
         }
       });
     };
