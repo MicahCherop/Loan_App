@@ -72,6 +72,38 @@ CREATE TABLE repayments (
   officer_id UUID REFERENCES auth.users(id)
 );
 
+-- 6.b Create Push Payment Requests Table
+CREATE TABLE push_payment_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  phone TEXT NOT NULL,
+  amount NUMERIC NOT NULL,
+  customer_name TEXT,
+  purpose TEXT NOT NULL,
+  status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'success', 'failed')),
+  initiated_by UUID REFERENCES auth.users(id),
+  daraja_checkout_request_id TEXT,
+  daraja_response_code TEXT,
+  daraja_response JSONB
+);
+
+ALTER TABLE push_payment_requests ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can insert their own push payment requests" ON public.push_payment_requests
+  FOR INSERT WITH CHECK (auth.uid() = initiated_by);
+
+CREATE POLICY "Users can update their own push payment requests" ON public.push_payment_requests
+  FOR UPDATE USING (auth.uid() = initiated_by)
+  WITH CHECK (auth.uid() = initiated_by);
+
+CREATE POLICY "Users can view their own push payment requests" ON public.push_payment_requests
+  FOR SELECT USING (auth.uid() = initiated_by);
+
+CREATE POLICY "Admins can manage push payment requests" ON public.push_payment_requests
+  FOR ALL USING (public.is_platform_admin())
+  WITH CHECK (public.is_platform_admin());
+
 -- 7. Create Repeat Loan Requests Table
 CREATE TABLE loan_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

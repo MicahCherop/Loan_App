@@ -135,7 +135,7 @@ export function AuthProvider({ children }) {
       const profileData = await syncProfile(session.user);
 
       if (!profileData) {
-        console.warn('No profile found for user:', authUser.id);
+        console.warn('No profile found for user:', session.user?.id);
         await supabase.auth.signOut();
         setAuthError('Your account is not authorized. Please contact an administrator.');
         setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
