@@ -117,7 +117,23 @@ export function AuthProvider({ children }) {
         .maybeSingle();
 
       if (retryErr) throw retryErr;
-      return retried ?? null;
+      if (retried) return retried;
+
+      if (email) {
+        const { data: emailMatch, error: emailErr } = await supabase
+          .from('profiles')
+          .select('id, email, role, created_at')
+          .eq('email', email)
+          .maybeSingle();
+
+        if (emailErr) throw emailErr;
+        if (emailMatch) {
+          console.warn('syncProfile fallback: matched profile by email for user', authUser.id, 'profile id', emailMatch.id);
+          return emailMatch;
+        }
+      }
+
+      return null;
     } catch (err) {
       console.error('syncProfile error:', err);
       throw err;

@@ -163,7 +163,11 @@ $$ LANGUAGE sql SECURITY DEFINER SET search_path = public;
 
 -- Profiles: users can see their own profile; admins can manage platform profiles.
 CREATE POLICY "Users can view their own profile" ON profiles
-  FOR SELECT USING (auth.uid() = id OR public.is_platform_admin());
+  FOR SELECT USING (
+    auth.uid() = id
+    OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email)
+    OR public.is_platform_admin()
+  );
 
 CREATE POLICY "Authorized users can insert their own profile" ON profiles
   FOR INSERT WITH CHECK (
@@ -178,8 +182,14 @@ CREATE POLICY "Admins can manage profiles" ON profiles
 
 
 CREATE POLICY "Users can update their own profile" ON profiles
-  FOR UPDATE USING (auth.uid() = id)
-  WITH CHECK (auth.uid() = id AND role = public.authorized_role_for(email));
+  FOR UPDATE USING (
+    auth.uid() = id
+    OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email)
+  )
+  WITH CHECK (
+    (auth.uid() = id OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email))
+    AND role = public.authorized_role_for(email)
+  );
 
 -- Application data is available only to users with an authorized profile.
 CREATE POLICY "Allow authorized leads access" ON leads

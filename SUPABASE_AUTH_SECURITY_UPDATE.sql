@@ -68,7 +68,11 @@ DROP POLICY IF EXISTS "Allow authorized loans access" ON public.loans;
 DROP POLICY IF EXISTS "Allow authorized loan requests access" ON public.loan_requests;
 
 CREATE POLICY "Users can view their own profile" ON public.profiles
-  FOR SELECT USING (auth.uid() = id OR public.is_platform_admin());
+  FOR SELECT USING (
+    auth.uid() = id
+    OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email)
+    OR public.is_platform_admin()
+  );
 
 CREATE POLICY "Authorized users can insert their own profile" ON public.profiles
   FOR INSERT WITH CHECK (
@@ -88,8 +92,14 @@ CREATE POLICY "Admins can manage pre-authorizations" ON public.pre_authorized_em
   WITH CHECK (public.is_platform_admin());
 
 CREATE POLICY "Users can update their own profile" ON public.profiles
-  FOR UPDATE USING (auth.uid() = id)
-  WITH CHECK (auth.uid() = id AND role = public.authorized_role_for(email));
+  FOR UPDATE USING (
+    auth.uid() = id
+    OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email)
+  )
+  WITH CHECK (
+    (auth.uid() = id OR public.normalized_email(auth.jwt() ->> 'email') = public.normalized_email(email))
+    AND role = public.authorized_role_for(email)
+  );
 
 CREATE TABLE IF NOT EXISTS public.push_payment_requests (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
