@@ -129,6 +129,22 @@ export function AuthProvider({ children }) {
         if (emailErr) throw emailErr;
         if (emailMatch) {
           console.warn('syncProfile fallback: matched profile by email for user', authUser.id, 'profile id', emailMatch.id);
+
+          if (emailMatch.id !== authUser.id) {
+            const { data: updated, error: updateErr } = await supabase
+              .from('profiles')
+              .update({ id: authUser.id })
+              .eq('email', email)
+              .select('id, email, role, created_at')
+              .single();
+
+            if (updateErr) {
+              console.warn('Failed to re-link profile by email to current auth UID:', updateErr.message);
+              return emailMatch;
+            }
+            return updated;
+          }
+
           return emailMatch;
         }
       }
