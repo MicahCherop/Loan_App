@@ -3,14 +3,20 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Public sign-in page. Only Google OAuth is supported.
  *
- * FIXES applied:
- *  [F1] OAuth code exchange is ONLY handled in AuthCallback — Login never calls
- *       exchangeCodeForSession. Doing it in both caused "code already used" errors.
- *  [F2] No blind setTimeout — uses onAuthStateChange + getSession correctly.
- *  [F3] URL error params (error_description etc.) parsed and shown inline.
- *  [F4] Router state authError (from approval walls / AuthCallback) shown on mount.
- *  [F5] Loading state resets correctly on every error path.
- *  [F6] Double-submit prevented: loading=true blocks the button until redirect fires.
+ * CRITICAL FIX — Do NOT call exchangeCodeForSession here.
+ *   callback.jsx is the sole owner of PKCE code exchange. If Login.jsx also
+ *   calls it when ?code= appears in the URL, the code gets consumed twice,
+ *   producing a 400 error and leaving the user permanently logged out.
+ *   If we somehow land on /login with ?code= still in the URL, we just
+ *   strip it and wait — the user should go back through /auth/callback.
+ *
+ * Other fixes:
+ *   [F1] Single useEffect with a StrictMode guard — no racing parallel effects.
+ *   [F2] getSession() wrapped in a race against a 7-second timeout so a hung
+ *        Supabase network request doesn't freeze the login page forever.
+ *   [F3] URL error params shown inline (not alert()).
+ *   [F4] Router state authError from approval walls / AuthCallback shown on mount.
+ *   [F5] Double-submit prevented: loading=true persists until redirect fires.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -24,13 +30,13 @@ export default function Login() {
   const [error,   setError]   = useState(null);
   const navigate   = useNavigate();
   const location   = useLocation();
-  const handledRef = useRef(false); // StrictMode guard
+  // StrictMode guard — prevents double-run in development
+  const handledRef = useRef(false);
 
-  // [F4] Show errors passed via router state (e.g. from approval walls, AuthCallback)
+  // [F4] Show errors passed via router state (approval walls, AuthCallback)
   useEffect(() => {
     if (location.state?.authError) {
       setError(location.state.authError);
-      // Clear state so a refresh doesn't re-show it
       window.history.replaceState({}, document.title, '/login');
     }
   }, [location.state]);
@@ -54,7 +60,7 @@ export default function Login() {
     }
   }, []);
 
-  // ── Core auth bootstrap ───────────────────────────────────────────────────
+  // [F1] Single bootstrap effect
   useEffect(() => {
     if (handledRef.current) return;
     handledRef.current = true;
@@ -62,48 +68,52 @@ export default function Login() {
     let mounted = true;
 
     const initialize = async () => {
-      // Already have a session? Go straight to the dashboard.
+      // [F2] Race getSession() against a timeout so a hung network request
+      //      doesn't freeze the login page for minutes.
       try {
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise((resolve) =>
-          window.setTimeout(() => resolve({ timeout: true }), 7000)
-        );
+        const sessionResult = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise(resolve =>
+            window.setTimeout(() => resolve({ _timeout: true }), 7000)
+          ),
+        ]);
 
-        const result = await Promise.race([sessionPromise, timeoutPromise]);
         if (!mounted) return;
 
-        if (result?.timeout) {
+        if (sessionResult?._timeout) {
           console.warn('Login: session check timed out.');
-          setError('Unable to check sign-in status. Please refresh.');
+          // Don't show an error — the user may just have a slow connection.
+          // They can still click the button.
           setLoading(false);
           return;
         }
 
-        if (!result?.error && result?.data?.session) {
+        if (!sessionResult?.error && sessionResult?.data?.session) {
           navigate('/', { replace: true });
           return;
         }
       } catch (err) {
         if (!mounted) return;
-        console.error('Login session bootstrap error:', err);
-        setError(err?.message || 'Unable to check sign-in status.');
-        setLoading(false);
+        console.error('Login session check error:', err);
+        // Non-fatal: just let the user sign in manually
+      }
+
+      // CRITICAL: If ?code= is still in the URL it means the user landed here
+      // instead of /auth/callback (e.g. misconfigured redirectTo). Strip it —
+      // do NOT call exchangeCodeForSession here. That would double-consume
+      // the code and cause a 400 that permanently breaks this session.
+      if (window.location.search.includes('code=')) {
+        console.warn('Login received ?code= — stripping. Redirecting to callback.');
+        window.history.replaceState({}, document.title, '/login');
+        // Attempt to send them through the proper callback path
+        navigate('/auth/callback' + window.location.search, { replace: true });
         return;
       }
 
-      // [F1] Do NOT handle ?code= here — AuthCallback owns that exchange.
-      // Attempting to call exchangeCodeForSession on the Login page after
-      // AuthCallback already consumed the code causes the 400 PKCE error.
-      // If we somehow land on /login with a code in the URL, just strip it.
-      if (window.location.search.includes('code=')) {
-        window.history.replaceState({}, document.title, '/login');
-      }
-
-      setLoading(false);
+      if (mounted) setLoading(false);
     };
 
-    // Listen for SIGNED_IN fired by Supabase (covers the OAuth redirect case
-    // where the user returns to the app and the event fires before initialize()).
+    // Listen for SIGNED_IN (fires if OAuth redirect hits this page for any reason)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
       if (event === 'SIGNED_IN' && session) {
@@ -129,6 +139,8 @@ export default function Login() {
     const { error: oauthError } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
+        // This MUST point to /auth/callback — the ONLY place that calls
+        // exchangeCodeForSession.
         redirectTo: `${window.location.origin}/auth/callback`,
         queryParams: {
           access_type: 'offline',
@@ -143,9 +155,8 @@ export default function Login() {
           ? 'Google Auth is not enabled. Enable it in Supabase → Authentication → Providers → Google.'
           : oauthError.message
       );
+      // [F5] Reset loading only on error — keep it true while browser redirects
       setLoading(false);
-      // [F6] If no error: browser is navigating to Google — keep loading=true so
-      // the button stays disabled and prevents a double-click race.
     }
   };
 

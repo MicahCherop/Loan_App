@@ -1,13 +1,25 @@
 /**
  * callback.jsx  (pages/auth/callback.jsx)
  * ─────────────────────────────────────────────────────────────────────────────
- * Handles the OAuth redirect from Google.
+ * Handles the OAuth redirect from Google after the user approves sign-in.
  *
- * KEY CHANGE: After a successful code exchange we NO LONGER navigate to "/"
- * immediately. Instead we wait for AuthContext's onAuthStateChange to fire
- * SIGNED_IN and confirm the session is fully established before navigating.
- * This eliminates the race where AuthContext mounts at "/" before the session
- * is written to storage.
+ * KEY DESIGN DECISIONS:
+ *
+ * 1. We exchange the PKCE code HERE and nowhere else.
+ *    Login.jsx must never call exchangeCodeForSession — doing so on both pages
+ *    causes a 400 "code already used" error that silently kills the session.
+ *
+ * 2. After exchange we navigate to "/" and let AuthContext's onAuthStateChange
+ *    handler do the profile sync. We do NOT call syncProfile or setUser here.
+ *    This avoids the race where AuthContext mounts at "/" before its own
+ *    SIGNED_IN event has fired.
+ *
+ * 3. We clear the ?code= from the URL immediately before calling
+ *    exchangeCodeForSession. This prevents a double-exchange if the user
+ *    hits back/forward while the spinner is showing.
+ *
+ * 4. A 10-second timeout ensures the page never hangs forever — it falls
+ *    back to checking getSession() directly.
  */
 
 import { useEffect, useRef } from 'react';
@@ -15,8 +27,9 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 
 export default function AuthCallback() {
-  const navigate   = useNavigate();
-  const handledRef = useRef(false);
+  const navigate    = useNavigate();
+  // StrictMode guard — prevents double-execution in development
+  const handledRef  = useRef(false);
 
   useEffect(() => {
     if (handledRef.current) return;
@@ -27,23 +40,24 @@ export default function AuthCallback() {
     };
 
     const handleCallback = async () => {
-      // ── Step 1: Check for OAuth error params ────────────────────────────
+
+      // ── Step 1: Check for OAuth error params in the URL ─────────────────
       const params = new URLSearchParams(window.location.search);
       const hash   = window.location.hash.startsWith('#')
         ? new URLSearchParams(window.location.hash.slice(1))
         : new URLSearchParams();
 
-      const urlError         = params.get('error')             || hash.get('error');
-      const errorCode        = params.get('error_code')        || hash.get('error_code');
-      const errorDescription = params.get('error_description') || hash.get('error_description');
+      const urlError    = params.get('error')             || hash.get('error');
+      const errorCode   = params.get('error_code')        || hash.get('error_code');
+      const errorDesc   = params.get('error_description') || hash.get('error_description');
 
-      if (urlError || errorDescription) {
-        const message = decodeURIComponent(errorDescription || urlError || 'Google sign-in failed.');
+      if (urlError || errorDesc) {
+        const message = decodeURIComponent(errorDesc || urlError || 'Google sign-in failed.');
         redirectWithError(`${message}${errorCode ? ` (${errorCode})` : ''}`);
         return;
       }
 
-      // ── Step 2: If we already have a session (e.g. back/forward nav) ────
+      // ── Step 2: Already have a session? (back/forward nav, refresh) ─────
       const { data: { session: existing } } = await supabase.auth.getSession();
       if (existing) {
         navigate('/', { replace: true });
@@ -55,23 +69,18 @@ export default function AuthCallback() {
       const hasImplicitToken = hash.get('access_token') || hash.get('refresh_token');
 
       if (code || hasImplicitToken) {
-        // Clear the URL immediately — prevents double-exchange on back nav
+        // Clear the URL BEFORE exchange so a back-nav can't re-use the code
+        const exchangeUrl = code
+          ? `${window.location.origin}/auth/callback?code=${code}`
+          : window.location.href;
+
         window.history.replaceState({}, document.title, window.location.pathname);
 
         let response;
         try {
-          if (code) {
-            // Reconstruct the full URL with the code for exchangeCodeForSession
-            response = await supabase.auth.exchangeCodeForSession(
-              `${window.location.origin}/auth/callback?code=${code}`
-            );
-          } else {
-            response = typeof supabase.auth.getSessionFromUrl === 'function'
-              ? await supabase.auth.getSessionFromUrl({ storeSession: true })
-              : await supabase.auth.exchangeCodeForSession(window.location.href);
-          }
+          response = await supabase.auth.exchangeCodeForSession(exchangeUrl);
         } catch (err) {
-          console.error('Code exchange threw:', err);
+          console.error('exchangeCodeForSession threw:', err);
           redirectWithError('Sign-in failed. Please try again.');
           return;
         }
@@ -82,32 +91,38 @@ export default function AuthCallback() {
           return;
         }
 
-        // Exchange succeeded — the session is now in storage.
-        // Navigate to "/" and let AuthContext's onAuthStateChange handle the rest.
         if (response.data?.session) {
+          // Session written to storage. Navigate to "/" — AuthContext's
+          // onAuthStateChange(SIGNED_IN) will handle profile sync.
           navigate('/', { replace: true });
           return;
         }
+
+        // exchangeCodeForSession returned no error but also no session.
+        // Fall through to the listener below.
       }
 
-      // ── Step 4: No code — listen for SIGNED_IN with timeout ─────────────
-      const timeout = setTimeout(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-          if (session) {
-            navigate('/', { replace: true });
-          } else {
-            redirectWithError('Sign-in timed out. Please try again.');
-          }
-        });
-      }, 10000);
+      // ── Step 4: No code in URL — wait for SIGNED_IN from Supabase ───────
+      // This covers the implicit flow where Supabase sets the session via
+      // the URL hash and fires SIGNED_IN before we can read getSession().
+      const timeoutId = window.setTimeout(async () => {
+        // Last resort: check manually
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session) {
+          navigate('/', { replace: true });
+        } else {
+          redirectWithError('Sign-in timed out. Please try again.');
+        }
+        subscription.unsubscribe();
+      }, 10_000);
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
         if (event === 'SIGNED_IN' && session) {
-          clearTimeout(timeout);
+          clearTimeout(timeoutId);
           subscription.unsubscribe();
           navigate('/', { replace: true });
         } else if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
-          clearTimeout(timeout);
+          clearTimeout(timeoutId);
           subscription.unsubscribe();
           redirectWithError('Sign-in was cancelled.');
         }

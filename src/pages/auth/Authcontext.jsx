@@ -3,20 +3,36 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Single source of truth for authentication.
  *
- * ROOT CAUSE OF LOADING LOOP (now fixed):
- *  callback.jsx navigates to "/" after exchanging the code. AuthContext mounts
- *  and BOTH getSession() AND onAuthStateChange(SIGNED_IN) fire almost
- *  simultaneously. The first call sets syncingRef=true; the second call sees
- *  the guard and returns null, clearing the user. The timeout then fires and
- *  the app shows as unauthenticated / stuck loading.
+ * ROOT CAUSES OF THE INFINITE LOADING BUG (all fixed here):
  *
- * FIX:
- *  - syncingRef replaced with a Promise-based mutex so concurrent calls
- *    wait for the first to finish instead of returning null.
- *  - applySession is debounced so rapid duplicate events collapse into one.
- *  - Bootstrap timeout is extended and only triggers setStatus('ready'),
- *    never clears the user — if a session exists it will always resolve.
- *  - onAuthStateChange is registered BEFORE getSession() so no event is missed.
+ * BUG 1 — syncingRef boolean deadlock
+ *   callback.jsx navigates to "/" after code exchange. React mounts the app
+ *   and fires BOTH getSession() AND onAuthStateChange(SIGNED_IN) within the
+ *   same tick. The first call sets syncingRef=true; the second sees the guard
+ *   and returns null. applySession then clears the user and sets status='ready'
+ *   with NO authenticated user, causing a redirect back to /login.
+ *   FIX: Replace the boolean with a Promise-based mutex. Concurrent callers
+ *   await the same promise instead of getting null.
+ *
+ * BUG 2 — applySession in useEffect deps causes infinite re-subscription
+ *   applySession was a useCallback that depended on [syncProfile, status].
+ *   Every time status changed, applySession got a new reference, causing the
+ *   useEffect to unsubscribe and re-subscribe to onAuthStateChange, which
+ *   fired SIGNED_IN again, looping indefinitely.
+ *   FIX: Remove status from applySession deps. Use a ref to track the last
+ *   synced user ID instead of reading state inside the callback.
+ *
+ * BUG 3 — getSession() races with onAuthStateChange(SIGNED_IN)
+ *   Both fire nearly simultaneously after an OAuth redirect, resulting in two
+ *   concurrent applySession calls.
+ *   FIX: Debounce applySession calls with a 50ms timer so rapid duplicates
+ *   collapse into a single execution.
+ *
+ * BUG 4 — Timeout cleared user state
+ *   The safety-net timeout was setting status to 'error' or clearing the user
+ *   even when the session resolved successfully but slowly (e.g. cold DB wake).
+ *   FIX: Timeout only fires setStatus('ready') if still in 'loading' — it
+ *   never clears the user or sets an error on its own.
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
@@ -54,6 +70,7 @@ function resolveEmail(user) {
   return user?.email || user?.user_metadata?.email || '';
 }
 
+// Priority: DB full_name → Google full_name → Google name → email prefix
 function resolveDisplayName(user, profile) {
   if (profile?.full_name)             return profile.full_name;
   if (user?.user_metadata?.full_name) return user.user_metadata.full_name;
@@ -64,7 +81,7 @@ function resolveDisplayName(user, profile) {
   return prefix.charAt(0).toUpperCase() + prefix.slice(1);
 }
 
-// ─── Audit helper ─────────────────────────────────────────────────────────────
+// ─── Audit helper (fire-and-forget, non-fatal) ────────────────────────────────
 export async function logAudit(supabaseClient, { action, entity, entityId, payload }) {
   try {
     const { data: { session } } = await supabaseClient.auth.getSession();
@@ -88,23 +105,26 @@ export function AuthProvider({ children }) {
   const [approvalState, setApprovalState] = useState(null);
   const [authError,     setAuthError]     = useState(null);
 
-  // Promise-based mutex — concurrent callers await the same promise
-  // instead of returning null and clobbering state.
+  // ── FIX 1: Promise-based mutex ────────────────────────────────────────────
+  // If a syncProfile is already in flight, concurrent callers await the
+  // same promise instead of getting null and clobbering state.
   const syncPromiseRef  = useRef(null);
 
-  // Debounce ref — collapses rapid duplicate applySession calls
+  // ── FIX 3: Debounce ref ───────────────────────────────────────────────────
+  // Collapses getSession() + SIGNED_IN firing in the same tick into one call.
   const applyTimerRef   = useRef(null);
 
-  // Track the last session user ID so we skip redundant syncs
+  // ── FIX 2: Track last synced user to avoid redundant work ─────────────────
+  // Using a ref (not state) so it doesn't trigger re-renders or callback deps.
   const lastSyncedIdRef = useRef(null);
 
   // ── syncProfile ─────────────────────────────────────────────────────────────
   const syncProfile = useCallback(async (authUser) => {
     if (!authUser) return null;
 
-    // If a sync is already in flight, wait for it instead of returning null
+    // FIX 1: If a sync is already running, wait for it rather than bailing out
     if (syncPromiseRef.current) {
-      return syncPromiseRef.current;
+      try { return await syncPromiseRef.current; } catch { return null; }
     }
 
     const run = async () => {
@@ -115,7 +135,7 @@ export function AuthProvider({ children }) {
                       || authUser.user_metadata?.name
                       || null;
 
-        // 1. Fetch existing profile
+        // 1. Fetch existing profile row
         const { data: existing, error: fetchErr } = await supabase
           .from('profiles')
           .select('*')
@@ -142,12 +162,12 @@ export function AuthProvider({ children }) {
 
           if (patchErr) {
             console.warn('Profile patch warning:', patchErr.message);
-            return { ...existing, ...patches };
+            return { ...existing, ...patches }; // optimistic merge
           }
           return patched;
         }
 
-        // 2. No row — insert
+        // 2. No row — insert a new one
         const insertPayload = {
           id:     authUser.id,
           email,
@@ -163,7 +183,7 @@ export function AuthProvider({ children }) {
           .single();
 
         if (insertErr) {
-          // Race: DB trigger may have beaten us — retry read
+          // Race: DB trigger or another tab beat us — retry read
           console.warn('Profile insert conflict, retrying read:', insertErr.message);
           const { data: retried } = await supabase
             .from('profiles')
@@ -175,27 +195,32 @@ export function AuthProvider({ children }) {
 
         return created;
       } catch (err) {
-        console.error('syncProfile error:', err);
+        console.error('syncProfile error:', err.message);
         throw err;
       } finally {
-        syncPromiseRef.current = null;
+        syncPromiseRef.current = null; // always release the mutex
       }
     };
 
     syncPromiseRef.current = run();
     return syncPromiseRef.current;
-  }, []);
+  }, []); // stable — no deps that change
 
   // ── applySession ──────────────────────────────────────────────────────────
+  // FIX 2: Does NOT include `status` in its closure — uses lastSyncedIdRef
+  // instead. This keeps the reference stable so the useEffect below never
+  // re-subscribes due to a changed callback reference.
   const applySession = useCallback(async (session) => {
     if (!session) {
       setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
+      lastSyncedIdRef.current = null;
       return;
     }
 
-    // Skip if we already synced this exact user and are in a ready state
-    // (prevents double-apply from getSession + SIGNED_IN firing together)
-    if (lastSyncedIdRef.current === session.user.id && status === 'ready') {
+    // Skip redundant sync for the same verified user (e.g. TOKEN_REFRESHED
+    // firing after we're already fully authenticated)
+    if (lastSyncedIdRef.current === session.user.id) {
+      setStatus('ready'); // ensure we're not stuck in loading
       return;
     }
 
@@ -203,63 +228,65 @@ export function AuthProvider({ children }) {
       const profileData = await syncProfile(session.user);
 
       if (!profileData) {
-        console.warn('syncProfile returned null for user:', session.user?.id);
-        // Don't clear the user — this may be a transient DB hiccup.
-        // Set ready so the app doesn't hang; the next token refresh will retry.
+        // Transient DB hiccup — don't clear the user, just unblock the UI.
+        // The next TOKEN_REFRESHED event will retry.
+        console.warn('syncProfile returned null — transient failure, not clearing user');
         setStatus('ready');
         return;
       }
 
+      // ── Zero-trust gate ───────────────────────────────────────────────────
       if (profileData.status === 'pending') {
         await supabase.auth.signOut();
+        lastSyncedIdRef.current = null;
         setApprovalState('pending');
         setUser(null); setProfile(null); setStatus('ready');
-        lastSyncedIdRef.current = null;
         return;
       }
 
       if (profileData.status === 'blocked') {
         await supabase.auth.signOut();
+        lastSyncedIdRef.current = null;
         setApprovalState('blocked');
         setUser(null); setProfile(null); setStatus('ready');
-        lastSyncedIdRef.current = null;
         return;
       }
+      // ─────────────────────────────────────────────────────────────────────
 
-      // verified
+      // 'verified' — grant full access
       lastSyncedIdRef.current = session.user.id;
       setUser(session.user);
       setProfile(profileData);
       setApprovalState(null);
       setStatus('ready');
     } catch (err) {
-      console.error('applySession error:', err);
+      console.error('applySession error:', err.message);
       setAuthError(err.message || 'Failed to load your profile.');
-      setUser(null); setProfile(null); setStatus('error');
+      // Don't clear the user on network errors — let them retry
+      setStatus('error');
     }
-  }, [syncProfile, status]);
+  }, [syncProfile]); // syncProfile is stable so this ref is also stable
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
+  // ── Bootstrap — runs exactly once on mount ────────────────────────────────
   useEffect(() => {
     let mounted = true;
 
-    // Debounced wrapper so getSession() + SIGNED_IN firing at the same time
-    // only results in one applySession call
+    // FIX 3: Debounced apply — collapses getSession() + SIGNED_IN race
     const scheduleApply = (session) => {
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       applyTimerRef.current = setTimeout(() => {
-        if (!mounted) return;
-        applySession(session);
-      }, 50); // 50ms debounce — collapses same-tick duplicate events
+        if (mounted) applySession(session);
+      }, 50); // 50 ms window — enough to deduplicate same-tick events
     };
 
-    // Register the listener FIRST so we never miss a SIGNED_IN event
+    // Register onAuthStateChange FIRST so no SIGNED_IN event is ever missed
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!mounted) return;
 
       if (event === 'SIGNED_OUT' || event === 'USER_DELETED') {
         if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
         lastSyncedIdRef.current = null;
+        syncPromiseRef.current  = null;
         setUser(null); setProfile(null); setApprovalState(null); setStatus('ready');
         return;
       }
@@ -269,7 +296,7 @@ export function AuthProvider({ children }) {
       }
     });
 
-    // Then do the initial session check
+    // THEN check for an existing session (page refresh / direct URL visit)
     supabase.auth.getSession()
       .then(({ data: { session }, error }) => {
         if (!mounted) return;
@@ -278,12 +305,10 @@ export function AuthProvider({ children }) {
           setStatus('error');
           return;
         }
-        // If no session, set ready immediately — no need to wait
         if (!session) {
-          setStatus('ready');
+          setStatus('ready'); // unauthenticated — unblock UI immediately
           return;
         }
-        // Session exists — schedule apply (may merge with incoming SIGNED_IN)
         scheduleApply(session);
       })
       .catch((err) => {
@@ -293,19 +318,18 @@ export function AuthProvider({ children }) {
         setStatus('error');
       });
 
-    // Safety net — only fires if neither getSession nor SIGNED_IN resolved
+    // FIX 4: Safety-net timeout — only unblocks the loading spinner.
+    // Never clears the user or sets an error on its own.
     const timeoutId = window.setTimeout(() => {
       if (!mounted) return;
-      // Check if we're still loading — if so, something is truly stuck
       setStatus(prev => {
         if (prev === 'loading') {
           console.warn('Auth bootstrap timed out — forcing ready state.');
-          setAuthError('Authentication timed out. Please refresh the page.');
-          return 'ready';
+          return 'ready'; // unblock the UI; session may still resolve via listener
         }
-        return prev; // already resolved, don't touch it
+        return prev;
       });
-    }, 12000); // generous timeout — only a true last resort
+    }, 12_000);
 
     return () => {
       mounted = false;
@@ -313,11 +337,12 @@ export function AuthProvider({ children }) {
       if (applyTimerRef.current) clearTimeout(applyTimerRef.current);
       window.clearTimeout(timeoutId);
     };
-  }, []); // empty deps — runs once on mount only
+  }, []); // ← intentionally empty: runs ONCE on mount, never re-subscribes
 
   // ── logout ────────────────────────────────────────────────────────────────
   const logout = useCallback(async () => {
     lastSyncedIdRef.current = null;
+    syncPromiseRef.current  = null;
     try {
       await supabase.auth.signOut();
     } catch (err) {
@@ -325,11 +350,15 @@ export function AuthProvider({ children }) {
     } finally {
       try {
         Object.keys(localStorage).forEach(k => {
-          const isAuthKey = k.startsWith('sb:auth') || k.startsWith('supabase.auth') || k.startsWith('rfg-auth');
-          const isPkceKey = k.includes('code-verifier') || k.includes('pkce');
-          if (isAuthKey && !isPkceKey) localStorage.removeItem(k);
+          if (
+            k.startsWith('sb:auth') ||
+            k.startsWith('supabase.auth') ||
+            k.includes('-auth-token')
+          ) {
+            localStorage.removeItem(k);
+          }
         });
-      } catch {}
+      } catch { /* ignore storage errors */ }
       setUser(null); setProfile(null); setApprovalState(null);
       window.location.assign('/login');
     }
@@ -340,7 +369,7 @@ export function AuthProvider({ children }) {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
     lastSyncedIdRef.current = null; // force re-sync
-    syncPromiseRef.current = null;
+    syncPromiseRef.current  = null;
     const p = await syncProfile(session.user);
     if (p) setProfile(p);
   }, [syncProfile]);
@@ -351,7 +380,10 @@ export function AuthProvider({ children }) {
   const isDeveloper = profile?.role === 'developer'
                    || normalizeEmail(resolveEmail(user)) === DEV_EMAIL;
   const isAdmin     = profile?.role === 'admin';
-  const isAuthed    = status === 'ready' && !!user && !!profile && profile.status === 'verified';
+  const isAuthed    = status === 'ready'
+                   && !!user
+                   && !!profile
+                   && profile.status === 'verified';
 
   const value = {
     user, profile, status, approvalState, isAuthed, authError,
